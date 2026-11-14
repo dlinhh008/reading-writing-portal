@@ -1,0 +1,1521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reading & Writing Portal</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Merriweather:wght@400;700&display=swap" rel="stylesheet">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        serif: ['Merriweather', 'serif'],
+                    }
+                }
+            }
+        }
+    </script>
+
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js"></script>
+
+    <style>
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .paper-bg { background-color: #FDFBF7; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans antialiased">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const firebaseConfig = {
+            apiKey: "AIzaSyASAHEJaR_6Xl1uSY46m8yELdnYIP1OswY",
+            authDomain: "reading-portal-bb69e.firebaseapp.com",
+            projectId: "reading-portal-bb69e",
+            storageBucket: "reading-portal-bb69e.firebasestorage.app",
+            messagingSenderId: "882943699011",
+            appId: "1:882943699011:web:d2d7baa064026aa5b5ccf6",
+            measurementId: "G-P3MHY8DBVE"
+        };
+        
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const db = firebase.firestore();
+
+        const { useState, useEffect, useRef } = React;
+
+        const DEFAULT_WRITING_TESTS = [
+            {
+                id: 101,
+                title: "Writing Task 2: Technology & Education",
+                taskType: "IELTS Writing Task 2",
+                minWords: 250,
+                prompt: "Some people believe that technology has made learning easier and more accessible for students, while others argue that it distracts learners and reduces face-to-face interaction.\n\nDiscuss both views and give your own opinion.",
+                reqs: [
+                    "Write at least 250 words",
+                    "Discuss both perspectives clearly",
+                    "State your personal opinion and support it with relevant examples"
+                ],
+                imageUrl: ""
+            }
+        ];
+
+        const DEFAULT_DATA = {
+            users: [
+                { username: 'admin', password: 'teacher123', role: 'admin' },
+                { username: 'Thuc Han', password: '123', role: 'student' }
+            ],
+            tests: [
+                {
+                    id: 1,
+                    title: "Practice Test 1: Prison Reform & Rehabilitation",
+                    passage: "Effective reform requires more than good intentions. Authorities must justify how money is spent and concede when a policy has failed. They should also ameliorate harmful conditions by providing education, counselling and opportunities to develop employment skills. Staff need training to distinguish genuine improvement from superficial compliance. At the same time, programmes should be evaluated transparently so that the public can understand what works and why.\n\nAn intrepid group of researchers, former prisoners and prison officers has called for a system that combines accountability with rehabilitation. They warn that governments often procrastinate when reform is politically unpopular. Nevertheless, delaying action may allow preventable problems to continue. A fair justice system should neither excuse serious crime nor exaggerate the dangers posed by every former prisoner. Its success should be measured not simply by how many people it imprisons, but by how many people it helps to return to society without committing another offence.",
+                    vocab: [
+                        { w: "Rebuff", m: "Thẳng thừng từ chối, bác bỏ" },
+                        { w: "Embellish", m: "Tô vẽ, thêm thắt chi tiết" },
+                        { w: "Exonerate", m: "Minh oan, giải oan" },
+                        { w: "Concede", m: "Thừa nhận, nhượng bộ" },
+                        { w: "Intrepid", m: "Gan dạ, không sợ hãi" },
+                        { w: "Indisposed", m: "Không khỏe, không ở trạng thái sẵn sàng" },
+                        { w: "Ameliorate", m: "Cải thiện, làm cho tốt hơn" },
+                        { w: "Vindicate", m: "Chứng minh ai đó đúng; minh oan" },
+                        { w: "Divulge", m: "Tiết lộ, tiết lộ thông tin bí mật" },
+                        { w: "Procrastinate", m: "Trì hoãn, chần chừ" },
+                        { w: "Clarify", m: "Làm sáng tỏ, làm rõ" },
+                        { w: "Justify", m: "Biện minh, đưa ra lý do hợp lý" },
+                        { w: "Exaggerate", m: "Phóng đại, cường điệu" },
+                        { w: "Compliant", m: "Tuân thủ, chấp hành" },
+                        { w: "Reluctant", m: "Miễn cưỡng, không sẵn lòng" }
+                    ],
+                    mcq: [
+                        { q: "1. What is the main argument presented in the first paragraph?", options: ["A. Prison should be abolished entirely.", "B. Punishment alone may not effectively prevent people from committing crimes again.", "C. Education is more important than public safety.", "D. Criminals should not be held accountable for their actions."], a: "B" },
+                        { q: "2. According to the passage, what is the central purpose of rehabilitation programmes?", options: ["A. To reduce prison operating costs.", "B. To ensure that all prisoners receive shorter sentences.", "C. To help former prisoners rebuild their lives and reduce reoffending.", "D. To replace the criminal justice system."], a: "C" },
+                        { q: "3. Why might an independent review be necessary in a criminal case?", options: ["A. To increase the punishment imposed on offenders.", "B. To investigate contradictions and uncover potential errors.", "C. To protect investigators from public criticism.", "D. To prevent prisoners from appealing their convictions."], a: "B" },
+                        { q: "4. What does the word 'exonerate' most nearly mean in paragraph 2?", options: ["A. To accuse someone of a crime.", "B. To impose a heavier sentence.", "C. To clear someone of blame or guilt.", "D. To force someone to confess."], a: "C" },
+                        { q: "5. Why might officials initially rebuff requests to reopen a case?", options: ["A. They may be unwilling to reconsider the original decision.", "B. They have already released every prisoner.", "C. They want to provide prisoners with additional education.", "D. They are required to destroy old prison records."], a: "A" },
+                        { q: "6. Which of the following is identified as a factor that may worsen stress and aggression in prison?", options: ["A. Access to professional counselling.", "B. Participation in educational activities.", "C. Overcrowded cells and limited healthcare.", "D. Opportunities to develop employment skills."], a: "C" },
+                        { q: "7. Why are some prisoners reluctant to participate in rehabilitation courses?", options: ["A. They believe that education is completely unnecessary.", "B. They distrust institutions or fear being judged by others.", "C. They have already completed all rehabilitation programmes.", "D. They prefer to receive longer prison sentences."], a: "B" },
+                        { q: "8. Why might some prisoners embellish their personal histories?", options: ["A. To obtain additional prison sentences.", "B. To conceal the identity of prison officers.", "C. To impress staff or create a more favourable impression.", "D. To prevent independent investigations."], a: "C" },
+                        { q: "9. What should authorities do when a prison policy has failed?", options: ["A. Conceal the failure from the public.", "B. Concede the failure and reconsider their approach.", "C. Immediately increase the number of prisoners.", "D. Avoid evaluating the programme."], a: "B" },
+                        { q: "10. According to the final paragraph, how should the success of a justice system primarily be measured?", options: ["A. By the number of people imprisoned.", "B. By the length of prison sentences.", "C. By its ability to help people return to society without reoffending.", "D. By the amount of money spent on prison facilities."], a: "C" }
+                    ],
+                    fib: [
+                        { q: "11. The witness refused to __________ any confidential information about the suspect's identity.", a: "divulge" },
+                        { q: "12. The newly discovered evidence helped __________ the inconsistencies in the original investigation.", a: "clarify" },
+                        { q: "13. The court's final decision helped __________ the defendant, who had maintained his innocence for years.", a: "vindicate" },
+                        { q: "14. Several prisoners were __________ and unable to attend the scheduled rehabilitation session.", a: "indisposed" },
+                        { q: "15. Prison authorities expect inmates to remain __________ with safety regulations and institutional rules.", a: "compliant" },
+                        { q: "16. Although the rehabilitation programme was free, many prisoners were __________ to participate because they lacked trust in the system.", a: "reluctant" },
+                        { q: "17. The government introduced new healthcare policies to __________ the poor living conditions in overcrowded prisons.", a: "ameliorate" },
+                        { q: "18. Officials should not __________ when dealing with urgent prison reforms, as delays may lead to further problems.", a: "procrastinate" },
+                        { q: "19. The authorities were asked to __________ their decision to allocate more funding to prisoner education.", a: "justify" },
+                        { q: "20. The __________ researchers continued investigating the case despite receiving threats and facing considerable opposition.", a: "intrepid" }
+                    ],
+                    wordBank: ["divulge", "clarify", "vindicate", "indisposed", "compliant", "reluctant", "ameliorate", "procrastinate", "justify", "intrepid"],
+                    writingTask: {
+                        prompt: "To what extent should governments focus on rehabilitation over punishment?\n\nWrite a short paragraph (100–120 words).",
+                        reqs: ["Use specific examples", "Address counter-arguments"]
+                    }
+                }
+            ],
+            writingTests: DEFAULT_WRITING_TESTS,
+            scores: [],
+            writingSubmissions: []
+        };
+
+        const TEST_TEMPLATE = `{
+  "id": 4,
+  "title": "Practice Test 4: New Title",
+  "passage": "Paste your reading passage here...",
+  "vocab": [
+    { "w": "Word1", "m": "Meaning in Vietnamese" }
+  ],
+  "mcq": [
+    { 
+      "q": "1. Question text here?", 
+      "options": ["A. Option A", "B. Option B", "C. Option C", "D. Option D"], 
+      "a": "A" 
+    }
+  ],
+  "fib": [
+    { "q": "2. Sentence with a __________ blank.", "a": "word1" }
+  ],
+  "wordBank": ["word1", "word2"],
+  "writingTask": {
+    "prompt": "Your writing prompt here...",
+    "reqs": ["Requirement 1", "Requirement 2"]
+  }
+}`;
+
+        const WRITING_TEST_TEMPLATE = `{
+  "id": 102,
+  "title": "Writing Task 2: Environment & Economic Growth",
+  "taskType": "IELTS Writing Task 2",
+  "minWords": 250,
+  "prompt": "Some people think that economic growth is the only way to end hunger and poverty, while others say that economic growth is damaging the environment and should be stopped now.\\n\\nDiscuss both views and give your opinion.",
+  "reqs": [
+    "Write at least 250 words",
+    "Use formal academic register",
+    "Organize your essay into clear paragraphs"
+  ],
+  "imageUrl": ""
+}`;
+
+        function App() {
+            const [data, setData] = useState(null);
+            
+            const [currentUser, setCurrentUser] = useState(() => {
+                const saved = localStorage.getItem('portal_user');
+                return saved ? JSON.parse(saved) : null;
+            });
+            
+            const [activeTest, setActiveTest] = useState(null);
+            const [reviewSubmission, setReviewSubmission] = useState(null);
+            const [activeWritingTest, setActiveWritingTest] = useState(null);
+            const [reviewWritingSub, setReviewWritingSub] = useState(null);
+            const [timeLimit, setTimeLimit] = useState(0);
+            const [dbError, setDbError] = useState(null);
+
+            useEffect(() => {
+                const docRef = db.collection('portal_data').doc('main_database');
+                const unsubscribe = docRef.onSnapshot(
+                    (doc) => {
+                        if (doc.exists) {
+                            const cloudData = doc.data();
+                            setData({
+                                ...DEFAULT_DATA,
+                                ...cloudData,
+                                writingTests: cloudData.writingTests || DEFAULT_WRITING_TESTS,
+                                writingSubmissions: cloudData.writingSubmissions || []
+                            });
+                            setDbError(null);
+                        } else {
+                            docRef.set(DEFAULT_DATA).catch(err => setDbError("Không thể tạo Database."));
+                            setData(DEFAULT_DATA);
+                        }
+                    },
+                    (error) => {
+                        console.error("Firebase Error:", error);
+                        setDbError("Lỗi kết nối CSDL (Permission Denied).");
+                    }
+                );
+                return () => unsubscribe();
+            }, []);
+
+            const saveData = (newData) => {
+                setData(newData);
+                db.collection('portal_data').doc('main_database').set(newData).catch(err => {
+                    console.error("Cloud Save Error:", err);
+                    alert("Error saving to cloud! Check internet connection.");
+                });
+            };
+
+            const startTestSession = (test, selectedTime) => {
+                setTimeLimit(selectedTime);
+                setActiveTest(test);
+                setReviewSubmission(null);
+                setActiveWritingTest(null);
+                setReviewWritingSub(null);
+            };
+
+            const startWritingSession = (wTest, selectedTime) => {
+                setTimeLimit(selectedTime);
+                setActiveWritingTest(wTest);
+                setReviewWritingSub(null);
+                setActiveTest(null);
+                setReviewSubmission(null);
+            };
+
+            const resetToDashboard = () => {
+                setActiveTest(null);
+                setReviewSubmission(null);
+                setActiveWritingTest(null);
+                setReviewWritingSub(null);
+                setTimeLimit(0);
+            };
+
+            const handleLoginSuccess = (user) => {
+                localStorage.setItem('portal_user', JSON.stringify(user));
+                setCurrentUser(user);
+            };
+
+            const handleLogout = () => {
+                localStorage.removeItem('portal_user');
+                setCurrentUser(null);
+                resetToDashboard();
+            };
+
+            if (dbError) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center bg-slate-100 p-4">
+                        <div className="bg-white p-8 rounded-2xl shadow-xl border-t-4 border-red-500 text-center max-w-xl">
+                            <h2 className="text-2xl font-bold text-slate-800 mb-3">⚠️ Database Connection Error</h2>
+                            <p className="text-slate-600">{dbError}</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (!data) return (
+                <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50">
+                    <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-4"></div>
+                    <p className="font-semibold text-slate-500 tracking-wide">Connecting to Secure Cloud...</p>
+                </div>
+            );
+
+            if (!currentUser) return <Login data={data} onLogin={handleLoginSuccess} />;
+            
+            const isInsideWorkspace = activeTest || reviewSubmission || activeWritingTest || reviewWritingSub;
+
+            return (
+                <div className="h-screen flex flex-col bg-slate-50 font-sans">
+                    <header className="bg-slate-900 text-slate-50 px-6 py-4 flex justify-between items-center shadow-lg z-20 border-b border-slate-800">
+                        <div className="flex items-center gap-6">
+                            <div className="flex items-center gap-3">
+                                <span className="text-2xl">🎓</span>
+                                <h1 className="text-xl font-bold tracking-tight hidden sm:block bg-gradient-to-r from-blue-400 to-indigo-300 bg-clip-text text-transparent">
+                                    Reading & Writing Portal
+                                </h1>
+                            </div>
+                            {isInsideWorkspace && (
+                                <button onClick={resetToDashboard} className="flex items-center gap-2 text-slate-300 hover:text-white transition font-medium text-sm bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-full border border-slate-700">
+                                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+                                    Back to Dashboard
+                                </button>
+                            )}
+                        </div>
+                        <div className="flex items-center gap-4">
+                            <div className="hidden md:flex flex-col text-right">
+                                <span className="font-semibold text-sm leading-tight text-indigo-200">{currentUser.username}</span>
+                                <span className="text-xs text-slate-400 uppercase tracking-wider">{currentUser.role}</span>
+                            </div>
+                            <button onClick={handleLogout} className="bg-slate-800 hover:bg-red-600/90 hover:border-red-500 border border-slate-700 text-slate-300 hover:text-white px-5 py-2 rounded-full text-sm font-medium transition-all duration-200">
+                                Sign Out
+                            </button>
+                        </div>
+                    </header>
+                    
+                    <main className="flex-1 overflow-hidden relative">
+                        {currentUser.role === 'admin' 
+                            ? <AdminPanel data={data} saveData={saveData} /> 
+                            : activeTest 
+                                ? <StudentTest test={activeTest} currentUser={currentUser} data={data} saveData={saveData} timeLimit={timeLimit} onFinish={() => setTimeLimit(0)} />
+                            : reviewSubmission
+                                ? <StudentTest test={data.tests.find(t => t.id === reviewSubmission.testId)} currentUser={currentUser} data={data} saveData={saveData} reviewSubmission={reviewSubmission} />
+                            : activeWritingTest
+                                ? <StudentWritingTest test={activeWritingTest} currentUser={currentUser} data={data} saveData={saveData} timeLimit={timeLimit} onFinish={() => setTimeLimit(0)} />
+                            : reviewWritingSub
+                                ? <StudentWritingTest test={(data.writingTests || []).find(t => t.id === reviewWritingSub.testId) || { id: reviewWritingSub.testId, title: reviewWritingSub.testTitle, taskType: reviewWritingSub.taskType || "IELTS Writing", prompt: reviewWritingSub.prompt || "", minWords: 250 }} currentUser={currentUser} data={data} saveData={saveData} reviewSubmission={reviewWritingSub} />
+                            : <StudentDashboard 
+                                data={data} 
+                                currentUser={currentUser} 
+                                onSelectTest={startTestSession} 
+                                onReview={setReviewSubmission} 
+                                onSelectWritingTest={startWritingSession}
+                                onReviewWriting={setReviewWritingSub}
+                              />
+                        }
+                    </main>
+                </div>
+            );
+        }
+
+        function Login({ data, onLogin }) {
+            const [username, setUsername] = useState('');
+            const [password, setPassword] = useState('');
+            const [error, setError] = useState('');
+
+            const handleLogin = (e) => {
+                e.preventDefault();
+                const user = data.users.find(u => u.username === username && u.password === password);
+                if (user) {
+                    onLogin(user);
+                } else {
+                    setError('Incorrect credentials. Please try again.');
+                }
+            };
+
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-[conic-gradient(at_top_right,_var(--tw-gradient-stops))] from-slate-900 via-blue-950 to-slate-900 p-4 font-sans">
+                    <div className="bg-white/5 p-10 rounded-[2rem] shadow-2xl backdrop-blur-md border border-white/10 w-full max-w-[420px] relative overflow-hidden">
+                        <div className="text-center mb-10 mt-4">
+                            <div className="bg-indigo-600/20 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 ring-1 ring-indigo-500/30">
+                                <span className="text-4xl">📚</span>
+                            </div>
+                            <h2 className="text-2xl font-bold text-white tracking-tight">Reading & Writing Portal</h2>
+                            <p className="text-slate-400 mt-2 text-sm">Sign in to access your reading & writing practice</p>
+                        </div>
+
+                        {error && (
+                            <div className="bg-red-500/10 border border-red-500/50 text-red-200 p-3 mb-6 rounded-xl text-sm text-center backdrop-blur-sm">
+                                {error}
+                            </div>
+                        )}
+
+                        <form onSubmit={handleLogin} className="space-y-5">
+                            <div>
+                                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2 ml-1">Student ID / Username</label>
+                                <input type="text" className="w-full bg-slate-900/50 border border-slate-700 text-white p-4 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition outline-none placeholder-slate-600" placeholder="Enter your username" value={username} onChange={e => setUsername(e.target.value)} required />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2 ml-1">Password</label>
+                                <input type="password" className="w-full bg-slate-900/50 border border-slate-700 text-white p-4 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition outline-none placeholder-slate-600" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} required />
+                            </div>
+                            <div className="pt-4">
+                                <button type="submit" className="w-full bg-indigo-600 text-white p-4 rounded-xl hover:bg-indigo-500 transition-all font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] hover:shadow-[0_0_25px_rgba(79,70,229,0.5)] active:scale-[0.98]">
+                                    Secure Log In →
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
+        function AdminPanel({ data, saveData }) {
+            const [newStudent, setNewStudent] = useState('');
+            const [newPass, setNewPass] = useState('');
+            const [feedbackInputs, setFeedbackInputs] = useState({});
+            const [writingFeedbackInputs, setWritingFeedbackInputs] = useState({});
+            const [testJsonInput, setTestJsonInput] = useState('');
+            const [curriculumMode, setCurriculumMode] = useState('reading');
+            const [cutoffDate, setCutoffDate] = useState('');
+            const fileInputRef = useRef(null);
+
+            const writingTests = data.writingTests || [];
+            const writingSubmissions = data.writingSubmissions || [];
+
+            const handleAddUser = (e) => {
+                e.preventDefault();
+                if (data.users.find(u => u.username === newStudent)) return alert("User exists!");
+                saveData({ ...data, users: [...data.users, { username: newStudent, password: newPass, role: 'student' }] });
+                setNewStudent(''); setNewPass('');
+            };
+            const handleDeleteUser = (username) => {
+                if(username === 'admin') return;
+                saveData({ ...data, users: data.users.filter(u => u.username !== username) });
+            };
+
+            const handleAddTest = () => {
+                try {
+                    const parsed = JSON.parse(testJsonInput);
+                    if (!parsed.id || !parsed.title) throw new Error("Missing ID or Title");
+                    
+                    if (curriculumMode === 'reading') {
+                        const index = data.tests.findIndex(t => t.id === parsed.id);
+                        let newTests = [...data.tests];
+                        if (index >= 0) newTests[index] = parsed;
+                        else newTests.push(parsed);
+                        saveData({ ...data, tests: newTests });
+                    } else {
+                        const index = writingTests.findIndex(t => t.id === parsed.id);
+                        let newWTests = [...writingTests];
+                        if (index >= 0) newWTests[index] = parsed;
+                        else newWTests.push(parsed);
+                        saveData({ ...data, writingTests: newWTests });
+                    }
+                    setTestJsonInput('');
+                    alert("Test saved successfully!");
+                } catch (err) { alert("JSON Error: " + err.message); }
+            };
+
+            const handleDeleteTest = (id, type) => {
+                if (!window.confirm("Delete this test?")) return;
+                if (type === 'reading') {
+                    saveData({ ...data, tests: data.tests.filter(t => t.id !== id) });
+                } else {
+                    saveData({ ...data, writingTests: writingTests.filter(t => t.id !== id) });
+                }
+            };
+
+            const submitFeedback = (subId) => {
+                if (!feedbackInputs[subId]) return;
+                saveData({ ...data, scores: data.scores.map(s => s.subId === subId ? { ...s, feedback: feedbackInputs[subId] } : s) });
+                alert("Feedback published!");
+            };
+
+            const submitWritingTeacherFeedback = (subId) => {
+                if (writingFeedbackInputs[subId] === undefined) return;
+                saveData({
+                    ...data,
+                    writingSubmissions: writingSubmissions.map(s => s.subId === subId ? { ...s, teacherFeedback: writingFeedbackInputs[subId] } : s)
+                });
+                alert("Teacher feedback saved!");
+            };
+
+            const handleCleanup = () => {
+                if (!cutoffDate) return alert("Select a date!");
+                const [year, month, day] = cutoffDate.split('-').map(Number);
+                const cutoff = new Date(year, month - 1, day, 23, 59, 59, 999).getTime();
+                const remaining = data.scores.filter(s => new Date(s.date).getTime() > cutoff);
+                const remainingW = writingSubmissions.filter(s => new Date(s.date).getTime() > cutoff);
+                if(window.confirm(`Delete ${data.scores.length - remaining.length} reading & ${writingSubmissions.length - remainingW.length} writing old entries?`)) {
+                    saveData({ ...data, scores: remaining, writingSubmissions: remainingW });
+                }
+            };
+
+            const exportData = () => {
+                const dataStr = JSON.stringify(data, null, 2);
+                const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+                const link = document.createElement('a');
+                link.setAttribute('href', dataUri);
+                link.setAttribute('download', 'academic_portal_backup.json');
+                link.click();
+            };
+
+            const readingWritingTasks = data.scores.filter(s => s.writingAnswer).reverse();
+
+            return (
+                <div className="p-8 max-w-7xl mx-auto overflow-y-auto h-full space-y-8 pb-20">
+                    <div className="bg-white border-l-4 border-indigo-600 p-6 rounded-xl shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
+                        <div>
+                            <h2 className="text-xl font-bold text-slate-800 mb-1 flex items-center gap-2">
+                                <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span> Cloud Database Active
+                            </h2>
+                            <p className="text-sm text-slate-500">
+                                Reading Tests: {data.tests.length} | Writing Tests: {writingTests.length} | Total Submissions: {data.scores.length + writingSubmissions.length}
+                            </p>
+                        </div>
+                        <div className="flex gap-4 items-center flex-wrap justify-end">
+                            <div className="flex items-center gap-2 border border-slate-200 bg-slate-50 p-2 rounded-lg">
+                                <input type="date" value={cutoffDate} onChange={e=>setCutoffDate(e.target.value)} className="bg-transparent text-sm text-slate-700 outline-none" />
+                                <button onClick={handleCleanup} className="text-xs bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1.5 rounded-md font-semibold transition">Purge Old</button>
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={exportData} className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-semibold py-2.5 px-4 rounded-lg text-sm transition">
+                                    Download Backup ↓
+                                </button>
+                                <button onClick={() => fileInputRef.current.click()} className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-semibold py-2.5 px-4 rounded-lg text-sm transition">
+                                    Upload Backup ↑
+                                </button>
+                                <input type="file" ref={fileInputRef} onChange={(e) => {
+                                    const file = e.target.files[0];
+                                    if (!file) return;
+                                    const reader = new FileReader();
+                                    reader.onload = (event) => {
+                                        try {
+                                            const importedData = JSON.parse(event.target.result);
+                                            if(importedData.users && importedData.tests && importedData.scores) {
+                                                saveData({
+                                                    ...DEFAULT_DATA,
+                                                    ...importedData,
+                                                    writingTests: importedData.writingTests || DEFAULT_WRITING_TESTS,
+                                                    writingSubmissions: importedData.writingSubmissions || []
+                                                });
+                                                alert("Data successfully restored!");
+                                            } else {
+                                                alert("This file is missing required data.");
+                                            }
+                                        } catch (err) {
+                                            alert("Invalid backup file format.");
+                                        }
+                                    };
+                                    reader.readAsText(file);
+                                    e.target.value = null;
+                                }} accept=".json" className="hidden" />
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="grid md:grid-cols-2 gap-8">
+                        {/* Users */}
+                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                            <h2 className="text-lg font-bold text-slate-800 mb-6">Student Directory</h2>
+                            <form onSubmit={handleAddUser} className="flex gap-3 mb-6 bg-slate-50 p-4 rounded-lg border border-slate-200">
+                                <input type="text" placeholder="Username" className="w-1/3 border-slate-300 border p-2.5 rounded-md text-sm outline-none focus:border-indigo-500" value={newStudent} onChange={e=>setNewStudent(e.target.value)} required />
+                                <input type="password" placeholder="Password" className="w-1/3 border-slate-300 border p-2.5 rounded-md text-sm outline-none focus:border-indigo-500" value={newPass} onChange={e=>setNewPass(e.target.value)} required />
+                                <button type="submit" className="w-1/3 bg-slate-800 text-white rounded-md text-sm font-semibold hover:bg-slate-700 transition">Register</button>
+                            </form>
+                            <div className="max-h-64 overflow-y-auto pr-2 space-y-2">
+                                {data.users.filter(u => u.role === 'student').map(u => (
+                                    <div key={u.username} className="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-100 hover:border-slate-300 transition">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-xs">{u.username.charAt(0)}</div>
+                                            <span className="font-semibold text-slate-700 text-sm">{u.username}</span>
+                                        </div>
+                                        <button onClick={() => handleDeleteUser(u.username)} className="text-red-500 hover:text-red-700 text-xs font-bold uppercase tracking-wider bg-red-50 px-3 py-1 rounded">Remove</button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Recent Assessments (Reading & Writing) */}
+                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                            <h2 className="text-lg font-bold text-slate-800 mb-6">Recent Assessments</h2>
+                            <div className="max-h-80 overflow-y-auto pr-2 space-y-3">
+                                {[
+                                    ...data.scores.map(s => ({ ...s, _type: 'reading' })),
+                                    ...writingSubmissions.map(w => ({ ...w, _type: 'writing' }))
+                                ].sort((a, b) => new Date(b.date) - new Date(a.date)).map((s, i) => {
+                                    if (s._type === 'writing') {
+                                        return (
+                                            <div key={`w_${i}`} className="flex justify-between items-center bg-indigo-50/40 p-4 rounded-xl border border-indigo-100">
+                                                <div>
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <span className="font-bold text-slate-800">{s.username}</span>
+                                                        <span className="text-[10px] font-bold uppercase bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded">Writing</span>
+                                                        <span className="text-xs text-slate-400 bg-white px-2 py-0.5 rounded border">{new Date(s.date).toLocaleDateString()}</span>
+                                                    </div>
+                                                    <p className="text-xs text-slate-500 truncate max-w-[250px] font-medium">{s.testTitle} ({s.wordCount} words)</p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <div className="text-lg font-black text-indigo-600">Band {s.aiFeedback?.overallBand || 'N/A'}</div>
+                                                </div>
+                                            </div>
+                                        );
+                                    }
+                                    const t = data.tests.find(test=>test.id===s.testId);
+                                    const max = t ? (t.mcq.length + (t.fib?.length || 0)) : 20;
+                                    return (
+                                        <div key={`r_${i}`} className="flex justify-between items-center bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                            <div>
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <span className="font-bold text-slate-800">{s.username}</span>
+                                                    <span className="text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded">Reading</span>
+                                                    <span className="text-xs text-slate-400 bg-white px-2 py-0.5 rounded border">{new Date(s.date).toLocaleDateString()}</span>
+                                                </div>
+                                                <p className="text-xs text-slate-500 truncate max-w-[250px] font-medium">{s.testTitle}</p>
+                                            </div>
+                                            <div className="text-right">
+                                                <div className="text-xl font-black text-indigo-600">{s.score}<span className="text-sm text-slate-400 font-medium">/{max}</span></div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Curriculum Manager (Reading & Writing Tabs) */}
+                    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
+                            <h2 className="text-lg font-bold text-slate-800">Curriculum Manager</h2>
+                            <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+                                <button 
+                                    onClick={() => { setCurriculumMode('reading'); setTestJsonInput(''); }}
+                                    className={`px-4 py-1.5 rounded-lg text-xs font-bold transition ${curriculumMode === 'reading' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                                >
+                                    📖 Reading Tests ({data.tests.length})
+                                </button>
+                                <button 
+                                    onClick={() => { setCurriculumMode('writing'); setTestJsonInput(''); }}
+                                    className={`px-4 py-1.5 rounded-lg text-xs font-bold transition ${curriculumMode === 'writing' ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                                >
+                                    ✍️ Writing Prompts ({writingTests.length})
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="grid lg:grid-cols-3 gap-8">
+                            <div className="lg:col-span-1 space-y-3 max-h-[400px] overflow-y-auto pr-2">
+                                {curriculumMode === 'reading' ? (
+                                    data.tests.map(t => (
+                                        <div key={t.id} className="bg-slate-50 border border-slate-200 p-4 rounded-xl relative group">
+                                            <span className="absolute top-4 right-4 text-xs font-bold text-slate-300 group-hover:hidden">ID:{t.id}</span>
+                                            <button onClick={() => handleDeleteTest(t.id, 'reading')} className="absolute top-3 right-3 hidden group-hover:flex items-center justify-center w-6 h-6 bg-red-100 text-red-600 rounded-full hover:bg-red-500 hover:text-white transition">✕</button>
+                                            <p className="font-semibold text-slate-700 text-sm leading-snug pr-6">{t.title}</p>
+                                            <p className="text-xs text-slate-500 mt-2">{t.mcq.length} MCQ • {t.fib?.length || 0} FIB</p>
+                                        </div>
+                                    ))
+                                ) : (
+                                    writingTests.map(t => (
+                                        <div key={t.id} className="bg-indigo-50/40 border border-indigo-200 p-4 rounded-xl relative group">
+                                            <span className="absolute top-4 right-4 text-xs font-bold text-indigo-300 group-hover:hidden">ID:{t.id}</span>
+                                            <button onClick={() => handleDeleteTest(t.id, 'writing')} className="absolute top-3 right-3 hidden group-hover:flex items-center justify-center w-6 h-6 bg-red-100 text-red-600 rounded-full hover:bg-red-500 hover:text-white transition">✕</button>
+                                            <span className="text-[10px] font-bold uppercase tracking-wider bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded">{t.taskType || 'Writing'}</span>
+                                            <p className="font-semibold text-slate-800 text-sm leading-snug pr-6 mt-1.5">{t.title}</p>
+                                            <p className="text-xs text-slate-500 mt-1">Min words: {t.minWords || 250}</p>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                            <div className="lg:col-span-2 bg-slate-50 p-5 rounded-xl border border-slate-200">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h3 className="font-bold text-slate-700 text-sm uppercase tracking-wider">
+                                        {curriculumMode === 'reading' ? 'Reading Test JSON Editor' : 'Writing Prompt JSON Editor'}
+                                    </h3>
+                                    <button 
+                                        onClick={() => setTestJsonInput(curriculumMode === 'reading' ? TEST_TEMPLATE : WRITING_TEST_TEMPLATE)} 
+                                        className="text-xs bg-white border border-slate-300 text-slate-600 px-3 py-1.5 rounded-md font-semibold hover:bg-slate-100 transition"
+                                    >
+                                        Load {curriculumMode === 'reading' ? 'Reading' : 'Writing'} Template
+                                    </button>
+                                </div>
+                                <textarea 
+                                    className="w-full h-72 font-mono text-[13px] border border-slate-300 p-4 rounded-lg bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none shadow-inner text-slate-700"
+                                    placeholder={`Paste ${curriculumMode} test JSON here...`}
+                                    value={testJsonInput}
+                                    onChange={(e) => setTestJsonInput(e.target.value)}
+                                ></textarea>
+                                <div className="mt-4 flex justify-end">
+                                    <button onClick={handleAddTest} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-8 rounded-lg shadow-md hover:shadow-lg transition transform hover:-translate-y-0.5">
+                                        Upload to {curriculumMode === 'reading' ? 'Reading' : 'Writing'} Curriculum
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* AI Writing Submissions & Teacher Review Desk */}
+                    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                        <h2 className="text-lg font-bold text-slate-800 mb-6">Writing Assessment Desk (AI & Teacher Review)</h2>
+                        <div className="space-y-6">
+                            {writingSubmissions.slice().reverse().map(sub => (
+                                <div key={sub.subId} className="border border-indigo-200 rounded-xl overflow-hidden">
+                                    <div className="bg-indigo-50/70 px-5 py-3 border-b border-indigo-100 flex flex-wrap justify-between items-center gap-2">
+                                        <div className="flex items-center gap-3">
+                                            <span className="font-bold text-indigo-800">{sub.username}</span>
+                                            <span className="text-slate-300">|</span>
+                                            <span className="text-sm font-semibold text-slate-700">{sub.testTitle}</span>
+                                            <span className="text-xs bg-white text-indigo-700 font-bold px-2.5 py-0.5 rounded-full border border-indigo-200">
+                                                AI Band: {sub.aiFeedback?.overallBand || 'N/A'} ({sub.wordCount} words)
+                                            </span>
+                                        </div>
+                                        <span className="text-xs font-semibold text-slate-400 bg-white px-2 py-1 rounded border shadow-sm">{new Date(sub.date).toLocaleString('vi-VN')}</span>
+                                    </div>
+                                    <div className="p-5 space-y-4">
+                                        <div className="bg-[#FDFBF7] p-5 border border-slate-200 rounded-lg font-serif text-slate-800 leading-relaxed text-[15px] shadow-inner whitespace-pre-wrap">
+                                            {sub.essayText}
+                                        </div>
+                                        {sub.aiFeedback && (
+                                            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 text-xs text-slate-600 grid sm:grid-cols-2 gap-2">
+                                                <div><b>TR ({sub.aiFeedback.criteria?.taskResponse?.band}):</b> {sub.aiFeedback.criteria?.taskResponse?.feedback}</div>
+                                                <div><b>CC ({sub.aiFeedback.criteria?.coherenceCohesion?.band}):</b> {sub.aiFeedback.criteria?.coherenceCohesion?.feedback}</div>
+                                                <div><b>LR ({sub.aiFeedback.criteria?.lexicalResource?.band}):</b> {sub.aiFeedback.criteria?.lexicalResource?.feedback}</div>
+                                                <div><b>GRA ({sub.aiFeedback.criteria?.grammaticalRange?.band}):</b> {sub.aiFeedback.criteria?.grammaticalRange?.feedback}</div>
+                                            </div>
+                                        )}
+                                        <div className="bg-indigo-50/50 p-4 rounded-lg border border-indigo-100">
+                                            <label className="block text-xs font-bold uppercase tracking-wider text-indigo-800 mb-2">Additional Teacher's Note (Optional)</label>
+                                            <textarea 
+                                                className="w-full border border-indigo-200 p-3 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm bg-white text-slate-700" 
+                                                rows="2" 
+                                                placeholder="Add personal comments for the student..."
+                                                value={writingFeedbackInputs[sub.subId] !== undefined ? writingFeedbackInputs[sub.subId] : (sub.teacherFeedback || '')}
+                                                onChange={(e) => setWritingFeedbackInputs({...writingFeedbackInputs, [sub.subId]: e.target.value})}
+                                            ></textarea>
+                                            <div className="mt-3 flex justify-end">
+                                                <button onClick={() => submitWritingTeacherFeedback(sub.subId)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-md text-sm font-bold shadow-sm transition">
+                                                    Save Teacher Note
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+
+                            {readingWritingTasks.map(sub => (
+                                <div key={sub.subId} className="border border-slate-200 rounded-xl overflow-hidden">
+                                    <div className="bg-slate-50 px-5 py-3 border-b border-slate-200 flex justify-between items-center">
+                                        <div className="flex items-center gap-3">
+                                            <span className="font-bold text-indigo-700">{sub.username}</span>
+                                            <span className="text-slate-300">|</span>
+                                            <span className="text-sm font-medium text-slate-600">{sub.testTitle} (Reading Part 3)</span>
+                                        </div>
+                                        <span className="text-xs font-semibold text-slate-400 bg-white px-2 py-1 rounded border shadow-sm">{new Date(sub.date).toLocaleString('vi-VN')}</span>
+                                    </div>
+                                    <div className="p-5">
+                                        <div className="bg-[#FDFBF7] p-5 border border-slate-200 rounded-lg mb-5 font-serif text-slate-800 leading-relaxed text-[15px] shadow-inner whitespace-pre-wrap">
+                                            {sub.writingAnswer}
+                                        </div>
+                                        <div className="bg-indigo-50/50 p-4 rounded-lg border border-indigo-100">
+                                            <label className="block text-xs font-bold uppercase tracking-wider text-indigo-800 mb-2">Teacher's Evaluation</label>
+                                            <textarea 
+                                                className="w-full border border-indigo-200 p-3 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm bg-white text-slate-700" 
+                                                rows="3" 
+                                                placeholder="Provide constructive feedback here..."
+                                                value={feedbackInputs[sub.subId] !== undefined ? feedbackInputs[sub.subId] : (sub.feedback || '')}
+                                                onChange={(e) => setFeedbackInputs({...feedbackInputs, [sub.subId]: e.target.value})}
+                                            ></textarea>
+                                            <div className="mt-3 flex justify-end">
+                                                <button onClick={() => submitFeedback(sub.subId)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-md text-sm font-bold shadow-sm transition">
+                                                    Publish Feedback
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                            {writingSubmissions.length === 0 && readingWritingTasks.length === 0 && (
+                                <p className="text-slate-500 italic p-4 text-center bg-slate-50 rounded-lg">No writing submissions yet.</p>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // STUDENT DASHBOARD (Reading & Writing Tabs)
+        // ==========================================
+        function StudentDashboard({ data, currentUser, onSelectTest, onReview, onSelectWritingTest, onReviewWriting }) {
+            const [activeTab, setActiveTab] = useState('reading');
+            const [selectedTime, setSelectedTime] = useState(0);
+
+            const userScores = data.scores.filter(s => s.username === currentUser.username);
+            const userWritingSubs = (data.writingSubmissions || []).filter(s => s.username === currentUser.username);
+            const writingTests = data.writingTests || [];
+
+            return (
+                <div className="p-6 md:p-10 max-w-5xl mx-auto h-full overflow-y-auto">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+                        <div>
+                            <h2 className="text-3xl font-bold text-slate-800 tracking-tight">Your Assignments</h2>
+                            <p className="text-slate-500 mt-1">Select Reading or Writing practice below.</p>
+                        </div>
+
+                        {/* Section Switcher */}
+                        <div className="flex bg-slate-200/80 p-1.5 rounded-2xl self-start">
+                            <button
+                                onClick={() => { setActiveTab('reading'); setSelectedTime(0); }}
+                                className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2 ${
+                                    activeTab === 'reading'
+                                        ? 'bg-slate-900 text-white shadow-md'
+                                        : 'text-slate-600 hover:text-slate-900'
+                                }`}
+                            >
+                                <span>📖</span> Reading Practice
+                            </button>
+                            <button
+                                onClick={() => { setActiveTab('writing'); setSelectedTime(0); }}
+                                className={`px-5 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2 ${
+                                    activeTab === 'writing'
+                                        ? 'bg-indigo-600 text-white shadow-md'
+                                        : 'text-slate-600 hover:text-slate-900'
+                                }`}
+                            >
+                                <span>✍️</span> Writing Practice
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="mb-10 bg-indigo-50/70 border border-indigo-100 p-5 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm">
+                        <div>
+                            <h3 className="font-bold text-indigo-900 flex items-center gap-2">
+                                <span className="text-xl">⏱</span> Practice Mode Timer
+                            </h3>
+                            <p className="text-sm text-indigo-700 mt-1">Simulate real exam conditions by setting a time limit.</p>
+                        </div>
+                        <select 
+                            className="bg-white border border-indigo-200 text-indigo-900 font-bold py-2.5 px-4 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm min-w-[160px]"
+                            value={selectedTime} 
+                            onChange={e => setSelectedTime(Number(e.target.value))}
+                        >
+                            <option value={0}>No Time Limit</option>
+                            <option value={15}>15 Minutes</option>
+                            <option value={20}>20 Minutes (Task 1)</option>
+                            <option value={30}>30 Minutes</option>
+                            <option value={40}>40 Minutes (Task 2)</option>
+                        </select>
+                    </div>
+
+                    {activeTab === 'reading' ? (
+                        <div className="grid sm:grid-cols-2 lg:grid-cols-2 gap-6 pb-20">
+                            {data.tests.map((test, index) => {
+                                const testScores = userScores.filter(s => s.testId === test.id);
+                                const latest = testScores.length > 0 ? testScores[testScores.length - 1] : null;
+                                const max = test.mcq.length + (test.fib?.length || 0);
+                                const best = testScores.length > 0 ? Math.max(...testScores.map(s => s.score)) : null;
+
+                                return (
+                                    <div key={test.id} className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm hover:shadow-xl hover:border-indigo-200 transition-all duration-300 transform hover:-translate-y-1 flex flex-col justify-between">
+                                        <div>
+                                            <div className="flex justify-between items-start mb-4">
+                                                <span className="bg-indigo-50 text-indigo-700 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wide">Reading Module {index + 1}</span>
+                                                {best !== null && (
+                                                    <span className="flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md border border-emerald-100">
+                                                        <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"></path></svg>
+                                                        Best: {best}/{max}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <h3 className="text-xl font-bold text-slate-800 mb-2 leading-snug">{test.title.split(': ').pop()}</h3>
+                                            <p className="text-sm text-slate-500 line-clamp-2 mb-6 leading-relaxed">{test.passage.substring(0,100)}...</p>
+                                        </div>
+                                        
+                                        <div className="flex gap-3 mt-auto">
+                                            <button onClick={() => onSelectTest(test, selectedTime)} className="flex-1 bg-slate-900 hover:bg-indigo-600 text-white font-semibold py-2.5 rounded-xl transition-colors duration-300 text-sm shadow-md">
+                                                {best !== null ? 'Retake Test' : 'Start Reading'}
+                                            </button>
+                                            {latest && (
+                                                <button onClick={() => onReview(latest)} className="flex-1 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-semibold py-2.5 rounded-xl transition-colors duration-300 text-sm">
+                                                    Review Results
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <div className="grid sm:grid-cols-2 lg:grid-cols-2 gap-6 pb-20">
+                            {writingTests.map((wTest, index) => {
+                                const subs = userWritingSubs.filter(s => s.testId === wTest.id);
+                                const latest = subs.length > 0 ? subs[subs.length - 1] : null;
+                                const bestBand = subs.length > 0 ? Math.max(...subs.map(s => Number(s.aiFeedback?.overallBand || 0))) : null;
+
+                                return (
+                                    <div key={wTest.id} className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm hover:shadow-xl hover:border-indigo-300 transition-all duration-300 transform hover:-translate-y-1 flex flex-col justify-between">
+                                        <div>
+                                            <div className="flex justify-between items-start mb-4">
+                                                <span className="bg-purple-50 text-purple-700 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wide">
+                                                    {wTest.taskType || `Writing Task ${index + 1}`}
+                                                </span>
+                                                {bestBand !== null && bestBand > 0 && (
+                                                    <span className="flex items-center gap-1 text-xs font-bold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-md border border-indigo-200">
+                                                        ✨ Band {bestBand}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <h3 className="text-xl font-bold text-slate-800 mb-2 leading-snug">{wTest.title}</h3>
+                                            <p className="text-sm text-slate-500 line-clamp-3 mb-4 leading-relaxed">{wTest.prompt}</p>
+                                            <div className="text-xs font-semibold text-slate-400 mb-6">
+                                                Target: At least {wTest.minWords || 250} words • AI Assessment & Band 7.0 Sample
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="flex gap-3 mt-auto">
+                                            <button onClick={() => onSelectWritingTest(wTest, selectedTime)} className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-xl transition-colors duration-300 text-sm shadow-md">
+                                                {latest ? 'Write Again' : 'Start Writing'}
+                                            </button>
+                                            {latest && (
+                                                <button onClick={() => onReviewWriting(latest)} className="flex-1 bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-semibold py-2.5 rounded-xl transition-colors duration-300 text-sm">
+                                                    View AI Feedback
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                            {writingTests.length === 0 && (
+                                <div className="col-span-2 bg-white p-10 rounded-2xl border border-slate-200 text-center text-slate-500">
+                                    No writing topics uploaded yet. Please ask your instructor to add writing prompts.
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        // ==========================================
+        // WRITING TEST INTERFACE (Dual-Pane + AI Assessment + Band 7.0 Sample)
+        // ==========================================
+        function StudentWritingTest({ test, currentUser, data, saveData, reviewSubmission, timeLimit, onFinish }) {
+            const [essayText, setEssayText] = useState(reviewSubmission ? (reviewSubmission.essayText || '') : '');
+            const [aiResult, setAiResult] = useState(reviewSubmission ? (reviewSubmission.aiFeedback || null) : null);
+            const [isEvaluating, setIsEvaluating] = useState(false);
+            const [evalError, setEvalError] = useState(null);
+
+            const initialTime = timeLimit ? timeLimit * 60 : 0;
+            const [timeLeft, setTimeLeft] = useState(initialTime);
+
+            const words = essayText.trim() ? essayText.trim().split(/\s+/).length : 0;
+            const minWords = test.minWords || 250;
+
+            useEffect(() => {
+                if (!timeLimit || aiResult || reviewSubmission || isEvaluating) return;
+                if (timeLeft <= 0) return;
+                const timerId = setInterval(() => {
+                    setTimeLeft(prev => prev - 1);
+                }, 1000);
+                return () => clearInterval(timerId);
+            }, [timeLeft, timeLimit, aiResult, reviewSubmission, isEvaluating]);
+
+            const formatTime = (seconds) => {
+                const m = Math.floor(seconds / 60);
+                const s = seconds % 60;
+                return `${m}:${s.toString().padStart(2, '0')}`;
+            };
+
+            const handleAssessment = async () => {
+                if (words < 15) {
+                    alert("Please write at least 15 words before requesting AI Assessment.");
+                    return;
+                }
+
+                setIsEvaluating(true);
+                setEvalError(null);
+
+                try {
+                    const response = await fetch("/.netlify/functions/evaluate-writing", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            taskType: test.taskType || "IELTS Writing",
+                            promptText: test.prompt,
+                            essayText: essayText.trim(),
+                            wordCount: words
+                        })
+                    });
+
+                    const result = await response.json();
+                    if (!response.ok || result.error) {
+                        throw new Error(result.error || "Failed to evaluate essay.");
+                    }
+
+                    setAiResult(result);
+                    if (onFinish) onFinish();
+
+                    const newWritingSub = {
+                        subId: Date.now().toString(),
+                        username: currentUser.username,
+                        testId: test.id,
+                        testTitle: test.title,
+                        taskType: test.taskType || "IELTS Writing",
+                        prompt: test.prompt,
+                        essayText: essayText.trim(),
+                        wordCount: words,
+                        aiFeedback: result,
+                        date: new Date().toISOString()
+                    };
+
+                    const updatedSubs = [...(data.writingSubmissions || []), newWritingSub];
+                    saveData({ ...data, writingSubmissions: updatedSubs });
+                } catch (err) {
+                    console.error("Assessment Error:", err);
+                    setEvalError(err.message);
+                } finally {
+                    setIsEvaluating(false);
+                }
+            };
+
+            return (
+                <div className="flex flex-col md:flex-row h-full relative">
+                    {!reviewSubmission && timeLimit > 0 && (
+                        <div className={`fixed bottom-6 right-6 md:bottom-auto md:top-24 md:right-8 z-50 px-5 py-2.5 rounded-full font-black shadow-2xl border-2 transition-colors duration-500 flex items-center gap-2 backdrop-blur-md ${
+                            aiResult ? 'bg-slate-800/95 text-white border-slate-700 hidden md:flex' :
+                            timeLeft <= 60 ? 'bg-red-500/95 text-white border-red-400 animate-pulse' : 
+                            'bg-indigo-600/95 text-white border-indigo-400'
+                        }`}>
+                            <span className="text-xl">⏱</span>
+                            <span className="text-xl tracking-wider font-mono">{aiResult ? 'DONE' : formatTime(timeLeft)}</span>
+                        </div>
+                    )}
+
+                    {/* LEFT PANEL: WRITING PROMPT & AI FEEDBACK / BAND 7.0 SAMPLE */}
+                    <div className="w-full md:w-1/2 h-full border-r border-slate-300 paper-bg overflow-y-auto flex flex-col shadow-[inset_-10px_0_20px_-15px_rgba(0,0,0,0.1)]">
+                        <div className="bg-white/90 backdrop-blur-md px-6 py-4 border-b border-slate-200 sticky top-0 z-10 flex justify-between items-center shadow-sm">
+                            <span className="text-xs font-bold uppercase tracking-widest text-indigo-600">{test.taskType || 'Writing Task'}</span>
+                            <span className="font-bold text-slate-800 truncate max-w-xs">{test.title}</span>
+                        </div>
+
+                        <div className="p-8 md:p-10 space-y-6">
+                            {/* Prompt Box */}
+                            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                                <span className="text-xs font-bold uppercase tracking-wider text-slate-400 block mb-2">Writing Topic / Prompt</span>
+                                <p className="text-slate-800 font-serif text-[1.05rem] leading-relaxed whitespace-pre-wrap">{test.prompt}</p>
+                                
+                                {test.imageUrl && (
+                                    <div className="mt-4">
+                                        <img src={test.imageUrl} alt="Writing Task Prompt Visual" className="rounded-xl border border-slate-200 max-w-full mx-auto" />
+                                    </div>
+                                )}
+
+                                {test.reqs && test.reqs.length > 0 && (
+                                    <div className="mt-5 pt-4 border-t border-slate-100">
+                                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Instructions</span>
+                                        <ul className="list-disc ml-5 text-sm text-slate-600 space-y-1">
+                                            {test.reqs.map((r, i) => <li key={i}>{r}</li>)}
+                                        </ul>
+                                    </div>
+                                )}
+                            </div>
+
+                            {isEvaluating && (
+                                <div className="bg-indigo-50 border border-indigo-200 p-6 rounded-2xl text-center space-y-3 animate-pulse">
+                                    <div className="w-10 h-10 border-4 border-indigo-300 border-t-indigo-600 rounded-full animate-spin mx-auto"></div>
+                                    <h4 className="font-bold text-indigo-900">AI Examiner is evaluating your essay...</h4>
+                                    <p className="text-xs text-indigo-700">Analyzing Task Response, Coherence, Lexical Resource, Grammar, and generating a Band 7.0 Sample Answer.</p>
+                                </div>
+                            )}
+
+                            {evalError && (
+                                <div className="bg-red-50 border border-red-200 p-5 rounded-2xl text-red-700 text-sm">
+                                    <p className="font-bold mb-1">⚠️ Evaluation Error</p>
+                                    <p>{evalError}</p>
+                                </div>
+                            )}
+
+                            {/* AI Feedback & Sample Answer Band 7.0 */}
+                            {aiResult && (
+                                <div className="space-y-6 pb-10">
+                                    {/* Overall Score Banner */}
+                                    <div className="bg-gradient-to-r from-indigo-600 to-blue-700 text-white p-6 rounded-2xl shadow-lg flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                                        <div>
+                                            <span className="text-xs uppercase tracking-widest text-indigo-200 font-bold">Estimated IELTS Score</span>
+                                            <div className="text-4xl font-black mt-1">Band {aiResult.overallBand}</div>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs bg-white/10 p-3.5 rounded-xl backdrop-blur-sm w-full sm:w-auto">
+                                            <div className="flex justify-between gap-3"><span>Task Response:</span> <b>{aiResult.criteria?.taskResponse?.band}</b></div>
+                                            <div className="flex justify-between gap-3"><span>Coherence:</span> <b>{aiResult.criteria?.coherenceCohesion?.band}</b></div>
+                                            <div className="flex justify-between gap-3"><span>Lexical Resource:</span> <b>{aiResult.criteria?.lexicalResource?.band}</b></div>
+                                            <div className="flex justify-between gap-3"><span>Grammar:</span> <b>{aiResult.criteria?.grammaticalRange?.band}</b></div>
+                                        </div>
+                                    </div>
+
+                                    {/* 4 Criteria Breakdown */}
+                                    <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+                                        <h4 className="font-bold text-slate-800 text-sm uppercase tracking-wider border-b pb-2">📊 Detailed Criteria Assessment</h4>
+                                        <div className="space-y-3 text-sm">
+                                            <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
+                                                <span className="font-bold text-indigo-700 block mb-1">Task Response (Band {aiResult.criteria?.taskResponse?.band})</span>
+                                                <p className="text-slate-700 leading-relaxed">{aiResult.criteria?.taskResponse?.feedback}</p>
+                                            </div>
+                                            <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
+                                                <span className="font-bold text-indigo-700 block mb-1">Coherence & Cohesion (Band {aiResult.criteria?.coherenceCohesion?.band})</span>
+                                                <p className="text-slate-700 leading-relaxed">{aiResult.criteria?.coherenceCohesion?.feedback}</p>
+                                            </div>
+                                            <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
+                                                <span className="font-bold text-indigo-700 block mb-1">Lexical Resource (Band {aiResult.criteria?.lexicalResource?.band})</span>
+                                                <p className="text-slate-700 leading-relaxed">{aiResult.criteria?.lexicalResource?.feedback}</p>
+                                            </div>
+                                            <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
+                                                <span className="font-bold text-indigo-700 block mb-1">Grammatical Range & Accuracy (Band {aiResult.criteria?.grammaticalRange?.band})</span>
+                                                <p className="text-slate-700 leading-relaxed">{aiResult.criteria?.grammaticalRange?.feedback}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Strengths & Areas for Improvement */}
+                                    {(aiResult.strengths?.length > 0 || aiResult.improvements?.length > 0) && (
+                                        <div className="grid sm:grid-cols-2 gap-4">
+                                            {aiResult.strengths?.length > 0 && (
+                                                <div className="bg-emerald-50/70 border border-emerald-200 p-4 rounded-2xl">
+                                                    <h5 className="font-bold text-emerald-800 text-xs uppercase tracking-wider mb-2">✅ Key Strengths</h5>
+                                                    <ul className="list-disc ml-4 text-xs text-emerald-900 space-y-1.5">
+                                                        {aiResult.strengths.map((s, i) => <li key={i}>{s}</li>)}
+                                                    </ul>
+                                                </div>
+                                            )}
+                                            {aiResult.improvements?.length > 0 && (
+                                                <div className="bg-amber-50/70 border border-amber-200 p-4 rounded-2xl">
+                                                    <h5 className="font-bold text-amber-800 text-xs uppercase tracking-wider mb-2">🎯 Areas to Improve</h5>
+                                                    <ul className="list-disc ml-4 text-xs text-amber-900 space-y-1.5">
+                                                        {aiResult.improvements.map((imp, i) => <li key={i}>{imp}</li>)}
+                                                    </ul>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* Sentence-level Corrections */}
+                                    {aiResult.corrections && aiResult.corrections.length > 0 && (
+                                        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-3">
+                                            <h4 className="font-bold text-slate-800 text-sm uppercase tracking-wider border-b pb-2">🛠 Grammar & Vocabulary Upgrades</h4>
+                                            <div className="space-y-3">
+                                                {aiResult.corrections.map((item, idx) => (
+                                                    <div key={idx} className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-sm space-y-1.5">
+                                                        <div>
+                                                            <span className="line-through text-red-500 font-medium mr-2">{item.original}</span>
+                                                            <span className="text-emerald-700 font-bold">→ {item.fixed}</span>
+                                                        </div>
+                                                        <p className="text-xs text-slate-600">💡 {item.explanation}</p>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Band 7.0 Sample Answer */}
+                                    {aiResult.sampleAnswerBand7 && (
+                                        <div className="bg-emerald-50/80 border-2 border-emerald-200 p-6 rounded-2xl shadow-sm space-y-3">
+                                            <div className="flex items-center justify-between border-b border-emerald-200 pb-2">
+                                                <h4 className="font-bold text-emerald-900 text-sm uppercase tracking-wider flex items-center gap-2">
+                                                    <span>🌟</span> Model Essay (Band 7.0 Standard)
+                                                </h4>
+                                            </div>
+                                            <div className="font-serif text-slate-800 text-[15px] leading-relaxed whitespace-pre-line">
+                                                {aiResult.sampleAnswerBand7}
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {/* Teacher's Note if present */}
+                                    {reviewSubmission?.teacherFeedback && (
+                                        <div className="p-5 bg-indigo-50 border border-indigo-200 rounded-2xl">
+                                            <h4 className="font-bold text-indigo-900 text-sm mb-2">👩‍🏫 Instructor's Additional Feedback</h4>
+                                            <p className="text-sm text-indigo-900 whitespace-pre-wrap leading-relaxed">{reviewSubmission.teacherFeedback}</p>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* RIGHT PANEL: ESSAY EDITOR & WORD COUNT */}
+                    <div className="w-full md:w-1/2 h-full bg-slate-50 flex flex-col p-6 md:p-10">
+                        <div className="bg-white px-5 py-3.5 rounded-t-2xl border border-b-0 border-slate-200 flex justify-between items-center shadow-sm">
+                            <div className="flex items-center gap-3">
+                                <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Word Count:</span>
+                                <span className={`text-base font-black px-3 py-0.5 rounded-full border ${
+                                    words >= minWords 
+                                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                                        : 'bg-amber-50 text-amber-700 border-amber-200'
+                                }`}>
+                                    {words} <span className="font-normal text-xs opacity-80">/ {minWords} min</span>
+                                </span>
+                            </div>
+                            <span className="text-xs text-slate-400 font-medium">
+                                {words >= minWords ? '✓ Target length reached' : `Need ${minWords - words} more words`}
+                            </span>
+                        </div>
+
+                        <textarea
+                            className="w-full flex-1 p-6 border border-slate-200 rounded-b-2xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none font-serif text-[1.05rem] leading-loose text-slate-800 bg-white shadow-inner resize-none"
+                            placeholder="Write your essay response here..."
+                            value={essayText}
+                            onChange={e => setEssayText(e.target.value)}
+                            disabled={isEvaluating || !!reviewSubmission}
+                        ></textarea>
+
+                        {!reviewSubmission && (
+                            <div className="mt-5 flex justify-end">
+                                <button
+                                    onClick={handleAssessment}
+                                    disabled={isEvaluating}
+                                    className={`w-full py-4 px-8 rounded-2xl font-bold text-white shadow-lg transition-all text-base flex items-center justify-center gap-3 ${
+                                        isEvaluating 
+                                            ? 'bg-slate-400 cursor-not-allowed' 
+                                            : 'bg-indigo-600 hover:bg-indigo-700 hover:shadow-xl transform hover:-translate-y-0.5'
+                                    }`}
+                                >
+                                    {isEvaluating ? (
+                                        <>
+                                            <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                                            <span>Assessing with AI Examiner...</span>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <span>✨</span>
+                                            <span>{aiResult ? 'Re-evaluate Essay with AI' : 'Assessment (AI Feedback & Band 7.0 Sample)'}</span>
+                                        </>
+                                    )}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        // ==========================================
+        // READING TEST INTERFACE (Split Screen Academic)
+        // ==========================================
+        function StudentTest({ test, currentUser, data, saveData, reviewSubmission, timeLimit, onFinish }) {
+            const [answers, setAnswers] = useState({});
+            const [locked, setLocked] = useState({});
+            const [submitted, setSubmitted] = useState(!!reviewSubmission);
+            const [score, setScore] = useState(reviewSubmission ? reviewSubmission.score : 0);
+            const [writingAnswer, setWritingAnswer] = useState(reviewSubmission ? (reviewSubmission.writingAnswer || '') : '');
+            
+            const [activeWordIndex, setActiveWordIndex] = useState(null); 
+            
+            const initialTime = timeLimit ? timeLimit * 60 : 0;
+            const [timeLeft, setTimeLeft] = useState(initialTime);
+
+            const maxScore = test.mcq.length + (test.fib?.length || 0);
+
+            useEffect(() => {
+                if (reviewSubmission) {
+                    const loadedAnswers = {};
+                    const loadedLocked = {};
+                    test.mcq.forEach((q, i) => { loadedAnswers[`mcq_${i}`] = q.a; loadedLocked[`mcq_${i}`] = true; });
+                    if(test.fib) test.fib.forEach((q, i) => { loadedAnswers[`fib_${i}`] = q.a.toLowerCase(); loadedLocked[`fib_${i}`] = true; });
+                    setAnswers(loadedAnswers);
+                    setLocked(loadedLocked);
+                }
+            }, [reviewSubmission, test]);
+
+            useEffect(() => {
+                if (!timeLimit || submitted || reviewSubmission) return;
+                
+                if (timeLeft <= 0) {
+                    submitTest();
+                    return;
+                }
+                
+                const timerId = setInterval(() => {
+                    setTimeLeft(prev => prev - 1);
+                }, 1000);
+                
+                return () => clearInterval(timerId);
+            }, [timeLeft, timeLimit, submitted, reviewSubmission]);
+
+            const formatTime = (seconds) => {
+                const m = Math.floor(seconds / 60);
+                const s = seconds % 60;
+                return `${m}:${s.toString().padStart(2, '0')}`;
+            };
+
+            const handleMCQ = (qIndex, optionLetter) => {
+                if (locked[`mcq_${qIndex}`]) return;
+                setAnswers(prev => ({ ...prev, [`mcq_${qIndex}`]: optionLetter }));
+            };
+
+            const handleFIB = (qIndex, word) => {
+                if (locked[`fib_${qIndex}`]) return;
+                setAnswers(prev => ({ ...prev, [`fib_${qIndex}`]: word.toLowerCase().trim() }));
+            };
+
+            const submitTest = () => {
+                let current = 0; let newLocked = { ...locked };
+                test.mcq.forEach((q, i) => { if (answers[`mcq_${i}`] === q.a) { current++; newLocked[`mcq_${i}`] = true; } });
+                if(test.fib) test.fib.forEach((q, i) => { if (answers[`fib_${i}`] === q.a.toLowerCase()) { current++; newLocked[`fib_${i}`] = true; } });
+
+                setScore(current); setLocked(newLocked); setSubmitted(true);
+                if (onFinish) onFinish(); 
+                
+                const newSub = { 
+                    subId: Date.now().toString(), username: currentUser.username, testId: test.id, 
+                    testTitle: test.title, score: current, date: new Date().toISOString(),
+                    writingAnswer: test.writingTask ? writingAnswer.trim() : null
+                };
+                saveData({ ...data, scores: [...data.scores, newSub] });
+            };
+
+            const retryIncorrect = () => {
+                setSubmitted(false);
+                const kept = {};
+                Object.keys(answers).forEach(k => { if (locked[k]) kept[k] = answers[k]; });
+                setAnswers(kept);
+            };
+
+            const renderInteractivePassage = () => {
+                if (!test.vocab || test.vocab.length === 0) return test.passage;
+
+                const sortedVocab = [...test.vocab].sort((a, b) => b.w.length - a.w.length);
+                const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const vocabWords = sortedVocab.map(v => escapeRegExp(v.w));
+                
+                const regex = new RegExp(`\\b(${vocabWords.join('|')})\\b`, 'gi');
+                const parts = test.passage.split(regex);
+
+                return parts.map((part, i) => {
+                    const matchedVocab = test.vocab.find(v => v.w.toLowerCase() === part.toLowerCase());
+                    if (matchedVocab) {
+                        return (
+                            <span 
+                                key={i} 
+                                onClick={() => setActiveWordIndex(activeWordIndex === i ? null : i)}
+                                className="relative inline-block bg-yellow-200/60 hover:bg-yellow-300 text-indigo-900 cursor-pointer font-medium px-1 rounded transition-colors"
+                                title="Click to see meaning"
+                            >
+                                {part}
+                                {activeWordIndex === i && (
+                                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-max max-w-[250px] bg-slate-900 text-white text-xs p-2 rounded-lg shadow-xl z-50 text-center font-sans font-normal leading-normal pointer-events-none before:content-[''] before:absolute before:top-full before:left-1/2 before:-translate-x-1/2 before:border-4 before:border-transparent before:border-t-slate-900">
+                                        {matchedVocab.m}
+                                    </span>
+                                )}
+                            </span>
+                        );
+                    }
+                    return <span key={i}>{part}</span>;
+                });
+            };
+
+            return (
+                <div className="flex flex-col md:flex-row h-full relative">
+                    
+                    {!reviewSubmission && timeLimit > 0 && (
+                        <div className={`fixed bottom-6 right-6 md:bottom-auto md:top-24 md:right-8 z-50 px-5 py-2.5 rounded-full font-black shadow-2xl border-2 transition-colors duration-500 flex items-center gap-2 backdrop-blur-md ${
+                            submitted ? 'bg-slate-800/95 text-white border-slate-700 hidden md:flex' :
+                            timeLeft <= 60 ? 'bg-red-500/95 text-white border-red-400 animate-pulse' : 
+                            'bg-indigo-600/95 text-white border-indigo-400'
+                        }`}>
+                            <span className="text-xl">⏱</span>
+                            <span className="text-xl tracking-wider font-mono">{submitted ? 'DONE' : formatTime(timeLeft)}</span>
+                        </div>
+                    )}
+
+                    {/* LEFT PANEL: READING */}
+                    <div className="w-full md:w-1/2 h-full border-r border-slate-300 paper-bg overflow-y-auto flex flex-col shadow-[inset_-10px_0_20px_-15px_rgba(0,0,0,0.1)]">
+                        <div className="bg-white/90 backdrop-blur-md px-6 py-4 border-b border-slate-200 sticky top-0 z-10 flex justify-between items-center shadow-sm">
+                            <span className="text-xs font-bold uppercase tracking-widest text-slate-400">Section I</span>
+                            <span className="font-bold text-slate-800 truncate max-w-xs">{test.title.split(': ').pop()}</span>
+                        </div>
+                        
+                        <div className="p-8 md:p-12 text-[1.1rem] leading-[2.2rem] text-slate-800 font-serif whitespace-pre-wrap selection:bg-indigo-200">
+                            {renderInteractivePassage()}
+
+                            {test.vocab && test.vocab.length > 0 && (
+                                <div className="mt-12 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden font-sans text-base leading-normal">
+                                    <div className="bg-slate-50 px-6 py-3 border-b border-slate-200 font-bold text-slate-700 text-sm uppercase tracking-wider">Glossary Summary</div>
+                                    <div className="p-6 grid gap-3">
+                                        {test.vocab.map((v, i) => (
+                                            <div key={i} className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-3 border-b border-slate-100 last:border-0 pb-3 last:pb-0">
+                                                <span className="font-bold text-indigo-800 sm:w-1/3">{v.w}</span>
+                                                <span className="text-slate-600 text-sm sm:w-2/3">{v.m}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* RIGHT PANEL: QUESTIONS */}
+                    <div className="w-full md:w-1/2 h-full bg-slate-50 overflow-y-auto p-6 md:p-10 relative pb-32">
+                        
+                        {submitted && (
+                            <div className="mb-8 bg-white border border-indigo-100 p-6 rounded-2xl shadow-lg flex justify-between items-center sticky top-0 z-20 overflow-hidden relative">
+                                <div className="absolute top-0 left-0 w-2 h-full bg-indigo-500"></div>
+                                <div>
+                                    <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Final Score</p>
+                                    <h2 className="text-3xl font-black text-slate-800">{score} <span className="text-xl text-slate-400 font-medium">/ {maxScore}</span></h2>
+                                </div>
+                                {(score < maxScore && !reviewSubmission) && (
+                                    <button onClick={retryIncorrect} className="bg-slate-900 hover:bg-indigo-600 text-white font-bold py-3 px-6 rounded-xl shadow-md transition-colors duration-300">
+                                        Retry Errors ↺
+                                    </button>
+                                )}
+                            </div>
+                        )}
+
+                        {test.mcq && test.mcq.length > 0 && (
+                            <div className="mb-12">
+                                <h3 className="font-bold text-lg mb-6 text-slate-800 border-b border-slate-200 pb-2">Part 1: Multiple Choice</h3>
+                                <div className="space-y-6">
+                                    {test.mcq.map((q, i) => {
+                                        const isLocked = locked[`mcq_${i}`];
+                                        const isWrong = submitted && !isLocked;
+                                        return (
+                                            <div key={i} className={`p-6 rounded-2xl border ${isLocked ? 'bg-emerald-50/50 border-emerald-200' : isWrong ? 'bg-red-50/50 border-red-200' : 'bg-white border-slate-200 shadow-sm'}`}>
+                                                <p className="font-bold text-slate-800 mb-4">{q.q}</p>
+                                                <div className="space-y-2">
+                                                    {q.options.map((opt, oIdx) => {
+                                                        const letter = opt.charAt(0);
+                                                        const isSelected = answers[`mcq_${i}`] === letter;
+                                                        return (
+                                                            <label 
+                                                                key={oIdx} 
+                                                                className={`flex items-center p-3 rounded-xl border cursor-pointer transition-all ${isSelected ? 'bg-indigo-50 border-indigo-300 shadow-[inset_0_0_0_1px_rgba(165,180,252,1)]' : 'hover:bg-slate-50 border-slate-100'} ${isLocked ? 'opacity-70 pointer-events-none' : ''}`}
+                                                            >
+                                                                <input 
+                                                                    type="radio" 
+                                                                    name={`mcq_${i}`} 
+                                                                    className="hidden" 
+                                                                    disabled={isLocked} 
+                                                                    checked={isSelected} 
+                                                                    onChange={() => handleMCQ(i, letter)} 
+                                                                />
+                                                                <div className={`w-5 h-5 rounded-full border flex items-center justify-center mr-4 flex-shrink-0 ${isSelected ? 'border-indigo-600' : 'border-slate-300'}`}>
+                                                                    {isSelected && <div className="w-2.5 h-2.5 bg-indigo-600 rounded-full"></div>}
+                                                                </div>
+                                                                <span className={isSelected ? 'text-indigo-900 font-medium' : 'text-slate-600'}>{opt}</span>
+                                                            </label>
+                                                        )
+                                                    })}
+                                                </div>
+                                                {isLocked && <div className="mt-4 flex items-center gap-1 text-emerald-600 text-sm font-bold"><svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd"></path></svg> Correct</div>}
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
+                        {test.fib && test.fib.length > 0 && (
+                            <div className="mb-12">
+                                <h3 className="font-bold text-lg mb-6 text-slate-800 border-b border-slate-200 pb-2">Part 2: Fill in the Blanks</h3>
+                                
+                                <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 mb-8 sticky top-2 z-10">
+                                    <p className="text-xs font-bold text-slate-400 mb-3 uppercase tracking-wider">Word Bank</p>
+                                    <div className="flex flex-wrap gap-2">
+                                        {test.wordBank.map((word, i) => {
+                                            const isUsed = Object.values(answers).includes(word.toLowerCase());
+                                            return (
+                                                <span key={i} className={`px-3 py-1.5 rounded-lg text-sm font-medium border ${isUsed ? 'bg-slate-100 text-slate-400 border-transparent line-through' : 'bg-white text-indigo-700 border-indigo-200 shadow-sm'}`}>
+                                                    {word}
+                                                </span>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                <div className="space-y-4">
+                                    {test.fib.map((q, i) => {
+                                        const isLocked = locked[`fib_${i}`];
+                                        const isWrong = submitted && !isLocked;
+                                        return (
+                                            <div key={i} className={`p-5 rounded-xl border flex flex-col xl:flex-row xl:items-center gap-4 ${isLocked ? 'bg-emerald-50/50 border-emerald-200' : isWrong ? 'bg-red-50/50 border-red-200' : 'bg-white border-slate-200 shadow-sm'}`}>
+                                                <p className="flex-1 font-medium text-slate-800">{q.q}</p>
+                                                <div className="flex flex-col items-start xl:items-end flex-shrink-0">
+                                                    <input type="text" placeholder="Type here..." disabled={isLocked} value={answers[`fib_${i}`] || ''} onChange={(e) => handleFIB(i, e.target.value)}
+                                                        className={`border-b-2 border-slate-300 bg-transparent py-2 px-1 w-40 text-center font-bold outline-none focus:border-indigo-500 transition-colors ${isLocked ? 'text-emerald-700 border-emerald-300' : 'text-slate-800'}`} />
+                                                    {isLocked && <span className="text-emerald-600 text-xs font-bold mt-2">✓ Locked</span>}
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+                        )}
+
+                        {test.writingTask && (
+                            <div className="mb-12">
+                                <h3 className="font-bold text-lg mb-6 text-slate-800 border-b border-slate-200 pb-2">Part 3: Written Response</h3>
+                                <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 relative overflow-hidden">
+                                    <div className="absolute top-0 left-0 w-1 h-full bg-slate-800"></div>
+                                    <p className="font-medium text-slate-800 whitespace-pre-wrap leading-relaxed mb-6">{test.writingTask.prompt}</p>
+                                    
+                                    {test.writingTask.reqs && (
+                                        <div className="mb-6 p-4 bg-slate-50 border border-slate-100 rounded-xl">
+                                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Requirements</span>
+                                            <ul className="list-disc ml-5 text-sm text-slate-600 space-y-1">
+                                                {test.writingTask.reqs.map(r => <li key={r}>{r}</li>)}
+                                            </ul>
+                                        </div>
+                                    )}
+
+                                    <textarea 
+                                        className={`w-full p-5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none font-serif leading-loose text-slate-800 bg-slate-50 shadow-inner resize-y min-h-[200px] ${submitted ? 'opacity-80 pointer-events-none' : ''}`}
+                                        placeholder="Begin your response here..."
+                                        value={writingAnswer}
+                                        onChange={e => setWritingAnswer(e.target.value)}
+                                        disabled={submitted}
+                                    />
+
+                                    {reviewSubmission?.feedback && (
+                                        <div className="mt-8 p-6 bg-indigo-50 border border-indigo-100 rounded-xl">
+                                            <div className="flex items-center gap-2 mb-3">
+                                                <div className="w-8 h-8 rounded-full bg-indigo-200 flex items-center justify-center text-indigo-700 text-lg">👩‍🏫</div>
+                                                <h4 className="font-bold text-indigo-900 tracking-tight">Instructor's Feedback</h4>
+                                            </div>
+                                            <p className="text-indigo-900/80 whitespace-pre-wrap leading-relaxed text-sm ml-10">{reviewSubmission.feedback}</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {!submitted && (
+                            <button onClick={submitTest} className="w-full bg-slate-900 hover:bg-indigo-600 text-white font-bold py-5 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 text-lg transform hover:-translate-y-1">
+                                Submit Assessment
+                            </button>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
