@@ -72,6 +72,58 @@
                     "State your personal opinion and support it with relevant examples"
                 ],
                 imageUrl: ""
+            },
+            {
+                id: 102,
+                title: "Writing Task 2: Youth Mental Health & Wellbeing",
+                taskType: "IELTS Writing Task 2",
+                minWords: 250,
+                prompt: "In many countries, an increasing number of young people are experiencing mental health problems such as stress, anxiety and depression.\n\nWhat are the main causes of this issue? What effects does it have on individuals and society? What measures can be taken to address this problem?",
+                reqs: [
+                    "Write at least 250 words",
+                    "Analyze the causes and societal/individual effects",
+                    "Propose clear and realistic solutions"
+                ],
+                imageUrl: ""
+            },
+            {
+                id: 103,
+                title: "Writing Task 2: Remote Working vs Traditional Workplace",
+                taskType: "IELTS Writing Task 2",
+                minWords: 250,
+                prompt: "Nowadays, an increasing number of people prefer to work remotely rather than travel to a traditional workplace every day.\n\nDo you think this is a positive or negative development?",
+                reqs: [
+                    "Write at least 250 words",
+                    "State a clear position (positive or negative development)",
+                    "Support your view with logical arguments and examples"
+                ],
+                imageUrl: ""
+            },
+            {
+                id: 104,
+                title: "Writing Task 2: Practical Skills vs Academic Education",
+                taskType: "IELTS Writing Task 2",
+                minWords: 250,
+                prompt: "Some people believe that schools should place greater emphasis on teaching practical skills, such as financial management, communication and problem-solving, rather than focusing mainly on academic subjects.\n\nTo what extent do you agree or disagree with this view?",
+                reqs: [
+                    "Write at least 250 words",
+                    "State your extent of agreement or disagreement clearly",
+                    "Provide well-developed arguments for both sides"
+                ],
+                imageUrl: ""
+            },
+            {
+                id: 105,
+                title: "Writing Task 2: Public Transport vs Road Infrastructure Investment",
+                taskType: "IELTS Writing Task 2",
+                minWords: 250,
+                prompt: "Some people think that governments should invest more money in public transportation to reduce traffic congestion and air pollution. Others believe that improving road infrastructure and building more roads is a better solution.\n\nDiscuss both these views and give your own opinion.",
+                reqs: [
+                    "Write at least 250 words",
+                    "Discuss both perspectives thoroughly",
+                    "Give and justify your own personal opinion"
+                ],
+                imageUrl: ""
             }
         ];
 
@@ -163,7 +215,7 @@
 }`;
 
         const WRITING_TEST_TEMPLATE = `{
-  "id": 102,
+  "id": 106,
   "title": "Writing Task 2: Environment & Economic Growth",
   "taskType": "IELTS Writing Task 2",
   "minWords": 250,
@@ -191,6 +243,7 @@
             const [timeLimit, setTimeLimit] = useState(0);
             const [dbError, setDbError] = useState(null);
 
+            // FIXED: Không bao giờ tự động gọi docRef.set(DEFAULT_DATA) khi mới tải trang để tránh ghi đè dữ liệu trên Cloud
             useEffect(() => {
                 const docRef = db.collection('portal_data').doc('main_database');
                 const unsubscribe = docRef.onSnapshot(
@@ -200,13 +253,17 @@
                             setData({
                                 ...DEFAULT_DATA,
                                 ...cloudData,
-                                writingTests: cloudData.writingTests || DEFAULT_WRITING_TESTS,
+                                users: (cloudData.users && cloudData.users.length > 0) ? cloudData.users : DEFAULT_DATA.users,
+                                tests: (cloudData.tests && cloudData.tests.length > 0) ? cloudData.tests : DEFAULT_DATA.tests,
+                                writingTests: (cloudData.writingTests && cloudData.writingTests.length > 0) ? cloudData.writingTests : DEFAULT_WRITING_TESTS,
+                                scores: cloudData.scores || [],
                                 writingSubmissions: cloudData.writingSubmissions || []
                             });
                             setDbError(null);
                         } else {
-                            docRef.set(DEFAULT_DATA).catch(err => setDbError("Không thể tạo Database."));
+                            // Chỉ hiển thị dữ liệu mặc định ở trình duyệt, tuyệt đối KHÔNG ghi đè lên Firebase
                             setData(DEFAULT_DATA);
+                            setDbError(null);
                         }
                     },
                     (error) => {
@@ -219,7 +276,7 @@
 
             const saveData = (newData) => {
                 setData(newData);
-                db.collection('portal_data').doc('main_database').set(newData).catch(err => {
+                db.collection('portal_data').doc('main_database').set(newData, { merge: true }).catch(err => {
                     console.error("Cloud Save Error:", err);
                     alert("Error saving to cloud! Check internet connection.");
                 });
@@ -514,7 +571,7 @@
                                                 saveData({
                                                     ...DEFAULT_DATA,
                                                     ...importedData,
-                                                    writingTests: importedData.writingTests || DEFAULT_WRITING_TESTS,
+                                                    writingTests: (importedData.writingTests && importedData.writingTests.length > 0) ? importedData.writingTests : DEFAULT_WRITING_TESTS,
                                                     writingSubmissions: importedData.writingSubmissions || []
                                                 });
                                                 alert("Data successfully restored!");
