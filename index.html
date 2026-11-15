@@ -1010,23 +1010,53 @@
                 setEvalError(null);
 
                 try {
-                    const response = await fetch("/.netlify/functions/evaluate-writing", {
+                    const systemInstruction = `
+Bạn là giám khảo chấm thi IELTS Writing chuyên nghiệp. Hãy chấm bài viết sau dựa trên đề bài được cung cấp.
+Loại bài: ${test.taskType || "IELTS Writing"}
+Đề bài: "${test.prompt}"
+Bài làm của học sinh (${words} từ): "${essayText.trim()}"
+
+Hãy trả về kết quả định dạng JSON thuần túy (không dùng markdown \`\`\`json) theo đúng cấu trúc sau:
+{
+  "overallBand": 6.5,
+  "criteria": {
+    "taskResponse": { "band": 6.5, "feedback": "Nhận xét chi tiết bằng tiếng Việt..." },
+    "coherenceCohesion": { "band": 6.5, "feedback": "Nhận xét chi tiết bằng tiếng Việt..." },
+    "lexicalResource": { "band": 6.0, "feedback": "Nhận xét chi tiết bằng tiếng Việt..." },
+    "grammaticalRange": { "band": 6.5, "feedback": "Nhận xét chi tiết bằng tiếng Việt..." }
+  },
+  "corrections": [
+    {
+      "original": "Câu hoặc cụm từ sai/chưa tự nhiên trong bài",
+      "fixed": "Cách sửa lại chuẩn và nâng cấp",
+      "explanation": "Giải thích ngắn gọn lý do sửa bằng tiếng Việt"
+    }
+  ],
+  "strengths": ["Điểm mạnh 1", "Điểm mạnh 2"],
+  "improvements": ["Cần cải thiện 1", "Cần cải thiện 2"],
+  "sampleAnswerBand7": "Bài mẫu hoàn chỉnh đạt chuẩn Band 7.0 cho đề bài này (chia đoạn rõ ràng bằng ký tự \\n\\n)."
+}`;
+
+                    const response = await fetch("/.netlify/functions/assess", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            taskType: test.taskType || "IELTS Writing",
-                            promptText: test.prompt,
-                            essayText: essayText.trim(),
-                            wordCount: words
-                        })
+                        body: JSON.stringify({ prompt: systemInstruction })
                     });
 
-                    const result = await response.json();
-                    if (!response.ok || result.error) {
-                        throw new Error(result.error || "Failed to evaluate essay.");
+                    const apiData = await response.json();
+                    
+                    if (!response.ok) {
+                        throw new Error(apiData.error?.message || "Lỗi phản hồi từ Gemini API");
+                    }
+                    
+                    if (!apiData.candidates || !apiData.candidates[0].content.parts[0].text) {
+                        throw new Error("API trả về dữ liệu rỗng. Hãy thử lại.");
                     }
 
-                    setAiResult(result);
+                    const resultText = apiData.candidates[0].content.parts[0].text;
+                    const resultJson = JSON.parse(resultText);
+
+                    setAiResult(resultJson);
                     if (onFinish) onFinish();
 
                     const newWritingSub = {
@@ -1038,12 +1068,13 @@
                         prompt: test.prompt,
                         essayText: essayText.trim(),
                         wordCount: words,
-                        aiFeedback: result,
+                        aiFeedback: resultJson,
                         date: new Date().toISOString()
                     };
 
                     const updatedSubs = [...(data.writingSubmissions || []), newWritingSub];
                     saveData({ ...data, writingSubmissions: updatedSubs });
+                    
                 } catch (err) {
                     console.error("Assessment Error:", err);
                     setEvalError(err.message);
@@ -1051,7 +1082,6 @@
                     setIsEvaluating(false);
                 }
             };
-
             return (
                 <div className="flex flex-col md:flex-row h-full relative">
                     {!reviewSubmission && timeLimit > 0 && (
