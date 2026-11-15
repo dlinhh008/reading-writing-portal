@@ -1,6 +1,6 @@
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") {
-    return { statusCode: 405, body: "Method Not Allowed" };
+    return { statusCode: 405, body: JSON.stringify({ error: "Method Not Allowed" }) };
   }
 
   try {
@@ -42,7 +42,7 @@ Hãy trả về kết quả định dạng JSON thuần túy (không dùng markd
 }`;
 
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -59,7 +59,18 @@ Hãy trả về kết quả định dạng JSON thuần túy (không dùng markd
     const data = await response.json();
 
     if (!response.ok) {
-      throw new Error(data.error?.message || "Lỗi phản hồi từ Gemini API");
+      return {
+        statusCode: response.status,
+        body: JSON.stringify({ error: data.error?.message || "Lỗi phản hồi từ Gemini API" })
+      };
+    }
+
+    // Bắt lỗi nếu Gemini trả về rỗng hoặc sai định dạng
+    if (!data.candidates || !data.candidates[0].content.parts[0].text) {
+        return {
+            statusCode: 500,
+            body: JSON.stringify({ error: "API trả về dữ liệu rỗng. Hãy thử lại." })
+        };
     }
 
     const resultText = data.candidates[0].content.parts[0].text;
@@ -72,7 +83,7 @@ Hãy trả về kết quả định dạng JSON thuần túy (không dùng markd
   } catch (error) {
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: "Lỗi khi chấm bài: " + error.message })
+      body: JSON.stringify({ error: "Lỗi kết nối hoặc xử lý dữ liệu: " + error.message })
     };
   }
 };
