@@ -26,7 +26,7 @@
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore-compat.js"></script>
 
@@ -74,24 +74,148 @@
 
         const { useState, useEffect, useRef, useMemo } = React;
 
+        // Supports both legacy tests (passage/mcq/fib at the top level)
+        // and new tests with parts: [{ title, passage, vocab, mcq, fib, wordBank }].
+        const getReadingParts = (test) => {
+            if (Array.isArray(test?.parts) && test.parts.length > 0) {
+                return test.parts.slice(0, 3).map((part, index) => ({
+                    ...part,
+                    title: part.title || `Reading Passage ${index + 1}`,
+                    passage: part.passage || '',
+                    vocab: Array.isArray(part.vocab) ? part.vocab : [],
+                    mcq: Array.isArray(part.mcq) ? part.mcq : [],
+                    fib: Array.isArray(part.fib) ? part.fib : [],
+                    wordBank: Array.isArray(part.wordBank) ? part.wordBank : []
+                }));
+            }
+
+            return [{
+                title: test?.partTitle || 'Reading Passage 1',
+                passage: test?.passage || '',
+                vocab: Array.isArray(test?.vocab) ? test.vocab : [],
+                mcq: Array.isArray(test?.mcq) ? test.mcq : [],
+                fib: Array.isArray(test?.fib) ? test.fib : [],
+                wordBank: Array.isArray(test?.wordBank) ? test.wordBank : [],
+                writingTask: test?.writingTask || null
+            }];
+        };
+
+        const getReadingQuestionCount = (test) => getReadingParts(test).reduce(
+            (total, part) => total + part.mcq.length + part.fib.length, 0
+        );
+
+        const getReadingPreview = (test) => getReadingParts(test)
+            .map(part => part.passage)
+            .filter(Boolean)
+            .join(' ')
+            .trim();
+
+        // Short-answer/FIB helpers. Matching ignores capitalization and extra spaces.
+        const normalizeShortAnswer = (value) => String(value ?? '')
+            .normalize('NFKC')
+            .trim()
+            .replace(/\s+/g, ' ')
+            .toLocaleLowerCase('en');
+
+        const getFIBAcceptedAnswers = (question) => {
+            const rawAnswers = question?.answers ?? question?.acceptedAnswers ?? question?.a ?? question?.answer ?? '';
+            const values = Array.isArray(rawAnswers) ? rawAnswers : [rawAnswers];
+            return values.map(value => String(value ?? '').trim()).filter(Boolean);
+        };
+
+        const getFIBWordCount = (value) => {
+            const cleaned = String(value ?? '').trim();
+            return cleaned ? cleaned.split(/\s+/).length : 0;
+        };
+
+        const isFIBAnswerCorrect = (question, studentAnswer) => {
+            const normalizedStudentAnswer = normalizeShortAnswer(studentAnswer);
+            if (!normalizedStudentAnswer) return false;
+
+            const acceptedAnswers = getFIBAcceptedAnswers(question);
+            const matchesAnswer = acceptedAnswers.some(answer => normalizeShortAnswer(answer) === normalizedStudentAnswer);
+            if (!matchesAnswer) return false;
+
+            const minWords = Number.isInteger(question?.minWords) ? question.minWords : null;
+            const maxWords = Number.isInteger(question?.maxWords) ? question.maxWords : Number.isInteger(question?.wordLimit) ? question.wordLimit : null;
+            const wordCount = getFIBWordCount(studentAnswer);
+            if (minWords !== null && wordCount < minWords) return false;
+            if (maxWords !== null && wordCount > maxWords) return false;
+            return true;
+        };
+
+        const getFIBWordLimitLabel = (question) => {
+            const minWords = Number.isInteger(question?.minWords) ? question.minWords : null;
+            const maxWords = Number.isInteger(question?.maxWords) ? question.maxWords : Number.isInteger(question?.wordLimit) ? question.wordLimit : null;
+            if (minWords !== null && maxWords !== null) return `${minWords}–${maxWords} words`;
+            if (maxWords !== null) return `NO MORE THAN ${maxWords} WORDS`;
+            if (minWords !== null) return `AT LEAST ${minWords} WORDS`;
+            return '';
+        };
+
+        const isWritingFeedbackPublished = (submission) => (
+            submission?.teacherFeedbackPublished === true &&
+            (submission.teacherFeedbackDraft === undefined || submission.teacherFeedbackDraft === submission.teacherFeedback)
+        );
+
+        // Compress uploaded Task 1 image to keep Firestore document lightweight (< 1MB limit)
+        const compressImageToDataUrl = (file, maxWidth = 900, quality = 0.82) => {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        let width = img.width;
+                        let height = img.height;
+                        if (width > maxWidth) {
+                            height = Math.round((height * maxWidth) / width);
+                            width = maxWidth;
+                        }
+                        const canvas = document.createElement('canvas');
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.fillStyle = '#FFFFFF';
+                        ctx.fillRect(0, 0, width, height);
+                        ctx.drawImage(img, 0, 0, width, height);
+                        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+                        resolve(dataUrl);
+                    };
+                    img.onerror = () => reject(new Error('Không thể đọc dữ liệu ảnh.'));
+                    img.src = e.target.result;
+                };
+                reader.onerror = () => reject(new Error('Lỗi đọc file ảnh.'));
+                reader.readAsDataURL(file);
+            });
+        };
+
         const speakWord = (text, e) => {
             if (e) {
                 e.preventDefault();
                 e.stopPropagation();
             }
-            const cleanWord = text.trim();
+
+            const cleanWord = String(text || '').trim();
             if (!cleanWord) return;
 
-            const fallbackTTS = () => {
-                if ('speechSynthesis' in window) {
-                    window.speechSynthesis.cancel();
-                    window.speechSynthesis.resume();
-                    const utterance = new SpeechSynthesisUtterance(cleanWord);
-                    utterance.lang = 'en-US';
-                    utterance.rate = 0.9;
-                    window.speechSynthesis.speak(utterance);
-                }
-            };
+            if ('speechSynthesis' in window && 'SpeechSynthesisUtterance' in window) {
+                const synth = window.speechSynthesis;
+                synth.cancel();
+                const utterance = new SpeechSynthesisUtterance(cleanWord);
+                utterance.lang = 'en-GB';
+                utterance.rate = 1.15;
+                utterance.pitch = 1;
+
+                const voices = synth.getVoices();
+                const englishVoice = voices.find(v => /^en-GB/i.test(v.lang))
+                    || voices.find(v => /^en-US/i.test(v.lang))
+                    || voices.find(v => /^en/i.test(v.lang));
+                if (englishVoice) utterance.voice = englishVoice;
+
+                synth.resume();
+                synth.speak(utterance);
+                return;
+            }
 
             let audioEl = document.getElementById('portal-tts-audio');
             if (!audioEl) {
@@ -99,15 +223,13 @@
                 audioEl.id = 'portal-tts-audio';
                 document.body.appendChild(audioEl);
             }
-
-            audioEl.onerror = fallbackTTS;
             audioEl.src = `https://api.dictionaryapi.dev/media/pronunciations/en/${encodeURIComponent(cleanWord.toLowerCase())}-uk.mp3`;
-
-            const playPromise = audioEl.play();
-            if (playPromise !== undefined) {
-                playPromise.catch(fallbackTTS);
-            }
+            audioEl.play().catch(() => alert('Trình duyệt không hỗ trợ phát âm tự động.'));
         };
+
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.getVoices();
+        }
 
         const DEFAULT_WRITING_TESTS = [
             {
@@ -256,25 +378,48 @@
         const TEST_TEMPLATE = `{
   "id": 4,
   "title": "Practice Test 4: New Title",
-  "passage": "Paste your reading passage here...",
-  "vocab": [
-    { "w": "Word1", "m": "Meaning in Vietnamese" }
-  ],
-  "mcq": [
-    { 
-      "q": "1. Question text here?", 
-      "options": ["A. Option A", "B. Option B", "C. Option C", "D. Option D"], 
-      "a": "A" 
+  "parts": [
+    {
+      "title": "Reading Passage 1",
+      "passage": "Paste the first reading passage here...",
+      "vocab": [
+        { "w": "Word1", "m": "Meaning in Vietnamese" }
+      ],
+      "mcq": [
+        {
+          "q": "1. Question text here?",
+          "options": ["A. Option A", "B. Option B", "C. Option C", "D. Option D"],
+          "a": "A"
+        }
+      ],
+      "fib": [
+        {
+          "q": "2. Many commuters now prefer __________ to driving into the city.",
+          "a": "public transport",
+          "answers": ["public transport", "mass transit"],
+          "minWords": 2,
+          "maxWords": 3
+        }
+      ],
+      "wordBank": ["public transport", "mass transit"]
+    },
+    {
+      "title": "Reading Passage 2",
+      "passage": "Paste the second reading passage here...",
+      "vocab": [],
+      "mcq": [],
+      "fib": [],
+      "wordBank": []
+    },
+    {
+      "title": "Reading Passage 3",
+      "passage": "Paste the third reading passage here...",
+      "vocab": [],
+      "mcq": [],
+      "fib": [],
+      "wordBank": []
     }
-  ],
-  "fib": [
-    { "q": "2. Sentence with a __________ blank.", "a": "word1" }
-  ],
-  "wordBank": ["word1", "word2"],
-  "writingTask": {
-    "prompt": "Your writing prompt here...",
-    "reqs": ["Requirement 1", "Requirement 2"]
-  }
+  ]
 }`;
 
         const LISTENING_TEST_TEMPLATE = `{
@@ -296,6 +441,22 @@
       "explanation": "Sarah nói rõ: 'arriving on Tuesday the 15th of October and checking out on Thursday the 17th'."
     }
   ]
+}`;
+
+        const WRITING_TASK1_TEMPLATE = `{
+  "id": 201,
+  "title": "Writing Task 1: Line Graph - Global Energy Consumption",
+  "taskType": "IELTS Writing Task 1",
+  "minWords": 150,
+  "prompt": "The graph below shows the consumption of energy by different sources in a European country between 1990 and 2020.\\n\\nSummarise the information by selecting and reporting the main features, and make comparisons where relevant.",
+  "reqs": [
+    "Write at least 150 words",
+    "Include a clear overview of the main trends",
+    "Select and compare key figures accurately"
+  ],
+  "outline": "1. Introduction: Paraphrase the prompt (what, where, when).\\n2. Overview: Overall upward trend in renewables, sharp decline in coal, oil remained dominant.\\n3. Body Paragraph 1: Describe fossil fuels (Oil, Coal, Natural Gas) with specific figures.\\n4. Body Paragraph 2: Describe renewable energy growth and minor sources.",
+  "sampleAnswer": "The line graph illustrates the proportion of energy consumed from five distinct sources in a European nation over a 30-year period from 1990 to 2020.\\n\\nOverall, while fossil fuels accounted for the majority of energy consumption throughout the period, reliance on coal fell markedly, whereas renewable energy experienced substantial growth.\\n\\nIn 1990, oil was the primary energy source at 42%, followed by coal at 30%. Over the next three decades, oil usage fluctuated slightly before ending at 35% in 2020. By contrast, coal consumption declined steadily to just 10% by the end of the period, while natural gas rose moderately from 18% to 25%.\\n\\nMeanwhile, renewable energy started at a negligible 4% in 1990, climbed gradually until 2005, and then surged to reach 22% in 2020, surpassing coal to become the third largest energy source.",
+  "imageUrl": ""
 }`;
 
         const WRITING_TEST_TEMPLATE = `{
@@ -596,7 +757,7 @@
         }
 
         // ==========================================
-        // ADMIN PANEL (Reading + Listening + Writing)
+        // ADMIN PANEL (Reading + Listening + Writing + Task 1 Image Uploader)
         // ==========================================
         function AdminPanel({ data, saveData }) {
             const [newStudent, setNewStudent] = useState('');
@@ -608,12 +769,26 @@
             const [testJsonInput, setTestJsonInput] = useState('');
             const [curriculumMode, setCurriculumMode] = useState('reading'); // 'reading' | 'listening' | 'writing'
             const [cutoffDate, setCutoffDate] = useState('');
+            const [isProcessingImage, setIsProcessingImage] = useState(false);
             const fileInputRef = useRef(null);
+            const curriculumJsonFileRef = useRef(null);
+            const writingImageFileRef = useRef(null);
 
             const listeningTests = data.listeningTests || [];
             const listeningScores = data.listeningScores || [];
             const writingTests = data.writingTests || [];
             const writingSubmissions = data.writingSubmissions || [];
+
+            // Extract preview imageUrl if the current Writing JSON has a valid imageUrl
+            const previewWritingImageUrl = useMemo(() => {
+                if (curriculumMode !== 'writing' || !testJsonInput.trim()) return '';
+                try {
+                    const parsed = JSON.parse(testJsonInput);
+                    return typeof parsed.imageUrl === 'string' ? parsed.imageUrl.trim() : '';
+                } catch (e) {
+                    return '';
+                }
+            }, [curriculumMode, testJsonInput]);
 
             const handleAddUser = (e) => {
                 e.preventDefault();
@@ -626,12 +801,112 @@
                 saveData({ ...data, users: data.users.filter(u => u.username !== username) });
             };
 
+            // Handle Task 1 Image Upload & Auto-Inject into JSON Editor
+            const handleWritingImageUpload = async (event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                if (!file.type.startsWith('image/')) {
+                    alert('Vui lòng chọn file hình ảnh hợp lệ (PNG, JPG, WEBP).');
+                    event.target.value = '';
+                    return;
+                }
+
+                setIsProcessingImage(true);
+                try {
+                    const compressedDataUrl = await compressImageToDataUrl(file, 900, 0.82);
+                    let baseObj;
+                    if (testJsonInput.trim()) {
+                        try {
+                            baseObj = JSON.parse(testJsonInput);
+                        } catch (parseErr) {
+                            alert('JSON hiện tại đang bị lỗi cú pháp nên không thể tự động chèn ảnh. Hãy bấm "Load Task 1 Template" trước rồi chọn lại ảnh.');
+                            setIsProcessingImage(false);
+                            event.target.value = '';
+                            return;
+                        }
+                    } else {
+                        baseObj = JSON.parse(WRITING_TASK1_TEMPLATE);
+                    }
+
+                    baseObj.imageUrl = compressedDataUrl;
+                    setTestJsonInput(JSON.stringify(baseObj, null, 2));
+                } catch (err) {
+                    alert('Không thể xử lý ảnh: ' + err.message);
+                } finally {
+                    setIsProcessingImage(false);
+                    event.target.value = '';
+                }
+            };
+
+            const handleRemoveWritingImage = () => {
+                if (!testJsonInput.trim()) return;
+                try {
+                    const parsed = JSON.parse(testJsonInput);
+                    parsed.imageUrl = "";
+                    setTestJsonInput(JSON.stringify(parsed, null, 2));
+                } catch (e) {
+                    alert('JSON hiện tại không hợp lệ.');
+                }
+            };
+
             const handleAddTest = () => {
                 try {
                     const parsed = JSON.parse(testJsonInput);
                     if (!parsed.id || !parsed.title) throw new Error("Missing ID or Title");
                     
                     if (curriculumMode === 'reading') {
+                        if (Array.isArray(parsed.parts)) {
+                            if (parsed.parts.length < 1 || parsed.parts.length > 3) {
+                                throw new Error("Reading tests can contain from 1 to 3 separate passages.");
+                            }
+                            parsed.parts = parsed.parts.map((part, index) => {
+                                if (!part || typeof part !== 'object' || !String(part.passage || '').trim()) {
+                                    throw new Error(`Reading Passage ${index + 1} is missing its passage text.`);
+                                }
+                                const fibQuestions = Array.isArray(part.fib) ? part.fib : [];
+                                fibQuestions.forEach((question, questionIndex) => {
+                                    if (!question || typeof question !== 'object' || !String(question.q || '').trim()) {
+                                        throw new Error(`Reading Passage ${index + 1}, Fill-in question ${questionIndex + 1}: missing question text (q).`);
+                                    }
+                                    if (getFIBAcceptedAnswers(question).length === 0) {
+                                        throw new Error(`Reading Passage ${index + 1}, Fill-in question ${questionIndex + 1}: add an answer in 'a' or 'answers'.`);
+                                    }
+                                    const minWords = question.minWords;
+                                    const maxWords = question.maxWords ?? question.wordLimit;
+                                    if (minWords !== undefined && (!Number.isInteger(minWords) || minWords < 1 || minWords > 3)) {
+                                        throw new Error(`Reading Passage ${index + 1}, Fill-in question ${questionIndex + 1}: minWords must be an integer from 1 to 3.`);
+                                    }
+                                    if (maxWords !== undefined && (!Number.isInteger(maxWords) || maxWords < 1 || maxWords > 3)) {
+                                        throw new Error(`Reading Passage ${index + 1}, Fill-in question ${questionIndex + 1}: maxWords/wordLimit must be an integer from 1 to 3.`);
+                                    }
+                                    if (minWords !== undefined && maxWords !== undefined && minWords > maxWords) {
+                                        throw new Error(`Reading Passage ${index + 1}, Fill-in question ${questionIndex + 1}: minWords cannot exceed maxWords.`);
+                                    }
+                                });
+                                return {
+                                    ...part,
+                                    title: part.title || `Reading Passage ${index + 1}`,
+                                    vocab: Array.isArray(part.vocab) ? part.vocab : [],
+                                    mcq: Array.isArray(part.mcq) ? part.mcq : [],
+                                    fib: fibQuestions,
+                                    wordBank: Array.isArray(part.wordBank) ? part.wordBank : []
+                                };
+                            });
+                        } else if (!String(parsed.passage || '').trim()) {
+                            throw new Error("Reading JSON must contain either 'parts' or a legacy 'passage' field.");
+                        } else {
+                            const legacyFib = Array.isArray(parsed.fib) ? parsed.fib : [];
+                            legacyFib.forEach((question, questionIndex) => {
+                                if (!question || !String(question.q || '').trim() || getFIBAcceptedAnswers(question).length === 0) {
+                                    throw new Error(`Fill-in question ${questionIndex + 1}: each question needs 'q' and an answer in 'a' or 'answers'.`);
+                                }
+                                const minWords = question.minWords;
+                                const maxWords = question.maxWords ?? question.wordLimit;
+                                if (minWords !== undefined && (!Number.isInteger(minWords) || minWords < 1 || minWords > 3)) throw new Error(`Fill-in question ${questionIndex + 1}: minWords must be from 1 to 3.`);
+                                if (maxWords !== undefined && (!Number.isInteger(maxWords) || maxWords < 1 || maxWords > 3)) throw new Error(`Fill-in question ${questionIndex + 1}: maxWords/wordLimit must be from 1 to 3.`);
+                                if (minWords !== undefined && maxWords !== undefined && minWords > maxWords) throw new Error(`Fill-in question ${questionIndex + 1}: minWords cannot exceed maxWords.`);
+                            });
+                        }
                         const index = data.tests.findIndex(t => t.id === parsed.id);
                         let newTests = [...data.tests];
                         if (index >= 0) newTests[index] = parsed;
@@ -647,15 +922,43 @@
                         else newLTests.push(parsed);
                         saveData({ ...data, listeningTests: newLTests });
                     } else {
-                        const index = writingTests.findIndex(t => t.id === parsed.id);
+                        if (!parsed.prompt) {
+                            throw new Error("Writing JSON must contain a 'prompt' field.");
+                        }
+                        const normalizedWriting = {
+                            ...parsed,
+                            taskType: parsed.taskType || (parsed.imageUrl ? "IELTS Writing Task 1" : "IELTS Writing Task 2"),
+                            minWords: Number(parsed.minWords) || (parsed.imageUrl ? 150 : 250),
+                            reqs: Array.isArray(parsed.reqs) ? parsed.reqs : [],
+                            imageUrl: parsed.imageUrl || ""
+                        };
+                        const index = writingTests.findIndex(t => t.id === normalizedWriting.id);
                         let newWTests = [...writingTests];
-                        if (index >= 0) newWTests[index] = parsed;
-                        else newWTests.push(parsed);
+                        if (index >= 0) newWTests[index] = normalizedWriting;
+                        else newWTests.push(normalizedWriting);
                         saveData({ ...data, writingTests: newWTests });
                     }
                     setTestJsonInput('');
                     alert("Test saved successfully!");
                 } catch (err) { alert("JSON Error: " + err.message); }
+            };
+
+            const handleLoadCurriculumJsonFile = (event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                if (!file.name.toLowerCase().endsWith('.json')) {
+                    alert('Vui lòng chọn file có định dạng .json.');
+                    event.target.value = '';
+                    return;
+                }
+                const reader = new FileReader();
+                reader.onload = (loadEvent) => {
+                    setTestJsonInput(String(loadEvent.target.result || ''));
+                    alert(`Đã nạp ${file.name} vào khung JSON. Kiểm tra nội dung rồi bấm Upload to Curriculum.`);
+                };
+                reader.onerror = () => alert('Không thể đọc file JSON này.');
+                reader.readAsText(file);
+                event.target.value = '';
             };
 
             const handleDeleteTest = (id, type) => {
@@ -704,19 +1007,38 @@
                 });
             };
 
-            const submitWritingTeacherFeedback = (subId) => {
-                const currentText = writingFeedbackInputs[subId];
-                if (currentText === undefined && !writingSubmissions.find(s => s.subId === subId)?.teacherFeedback) {
-                    return alert("Vui lòng nhập nhận xét trước khi lưu.");
+            const submitWritingTeacherFeedback = (subId, publish = false) => {
+                const submission = writingSubmissions.find(s => s.subId === subId);
+                if (!submission) return alert("Không tìm thấy bài viết cần chấm.");
+
+                const currentText = writingFeedbackInputs[subId] !== undefined
+                    ? writingFeedbackInputs[subId]
+                    : (submission.teacherFeedbackDraft ?? submission.teacherFeedback ?? '');
+
+                if (!currentText.trim()) {
+                    return alert("Vui lòng nhập nhận xét trước khi lưu hoặc xuất bản.");
                 }
-                saveData({
-                    ...data,
-                    writingSubmissions: writingSubmissions.map(s => s.subId === subId ? { 
-                        ...s, 
-                        teacherFeedback: currentText !== undefined ? currentText : s.teacherFeedback 
-                    } : s)
+
+                const updatedSubmissions = writingSubmissions.map(s => {
+                    if (s.subId !== subId) return s;
+                    if (publish) {
+                        return {
+                            ...s,
+                            teacherFeedback: currentText.trim(),
+                            teacherFeedbackDraft: currentText.trim(),
+                            teacherFeedbackPublished: true,
+                            teacherFeedbackPublishedAt: new Date().toISOString()
+                        };
+                    }
+                    return {
+                        ...s,
+                        teacherFeedbackDraft: currentText,
+                        teacherFeedbackDraftUpdatedAt: new Date().toISOString()
+                    };
                 });
-                alert("Teacher feedback saved!");
+
+                saveData({ ...data, writingSubmissions: updatedSubmissions });
+                alert(publish ? "Feedback đã được xuất bản cho học sinh!" : "Đã lưu bản nháp feedback.");
             };
 
             const handleCleanup = () => {
@@ -743,14 +1065,14 @@
             const filteredWritingSubs = writingSubmissions
                 .slice()
                 .reverse()
-                .filter(sub => !onlyUngraded || !sub.teacherFeedback || !sub.teacherFeedback.trim());
+                .filter(sub => !onlyUngraded || !isWritingFeedbackPublished(sub));
 
             const filteredReadingWritingTasks = data.scores
                 .filter(s => s.writingAnswer)
                 .reverse()
                 .filter(sub => !onlyUngraded || !sub.feedback || !sub.feedback.trim());
 
-            const ungradedCount = writingSubmissions.filter(s => !s.teacherFeedback || !s.teacherFeedback.trim()).length +
+            const ungradedCount = writingSubmissions.filter(s => !isWritingFeedbackPublished(s)).length +
                                   data.scores.filter(s => s.writingAnswer && (!s.feedback || !s.feedback.trim())).length;
 
             return (
@@ -852,7 +1174,7 @@
                                                 </div>
                                                 <div className="text-right">
                                                     <div className="text-sm font-bold text-indigo-600">
-                                                        {s.teacherFeedback ? '✓ Graded' : 'Pending Review'}
+                                                        {s.teacherFeedbackPublished ? '✓ Feedback published' : 'Pending Review'}
                                                     </div>
                                                 </div>
                                             </div>
@@ -876,7 +1198,7 @@
                                         );
                                     }
                                     const t = data.tests.find(test=>test.id===s.testId);
-                                    const max = t ? (t.mcq.length + (t.fib?.length || 0)) : 20;
+                                    const max = t ? getReadingQuestionCount(t) : (s.maxScore || 20);
                                     return (
                                         <div key={`r_${i}`} className="flex justify-between items-center bg-slate-50 p-4 rounded-xl border border-slate-100">
                                             <div>
@@ -924,14 +1246,14 @@
                         </div>
 
                         <div className="grid lg:grid-cols-3 gap-8">
-                            <div className="lg:col-span-1 space-y-3 max-h-[400px] overflow-y-auto pr-2">
+                            <div className="lg:col-span-1 space-y-3 max-h-[460px] overflow-y-auto pr-2">
                                 {curriculumMode === 'reading' ? (
                                     data.tests.map(t => (
                                         <div key={t.id} className="bg-slate-50 border border-slate-200 p-4 rounded-xl relative group">
                                             <span className="absolute top-4 right-4 text-xs font-bold text-slate-300 group-hover:hidden">ID:{t.id}</span>
                                             <button onClick={() => handleDeleteTest(t.id, 'reading')} className="absolute top-3 right-3 hidden group-hover:flex items-center justify-center w-6 h-6 bg-red-100 text-red-600 rounded-full hover:bg-red-500 hover:text-white transition">✕</button>
                                             <p className="font-semibold text-slate-700 text-sm leading-snug pr-6">{t.title}</p>
-                                            <p className="text-xs text-slate-500 mt-2">{t.mcq.length} MCQ • {t.fib?.length || 0} FIB</p>
+                                            <p className="text-xs text-slate-500 mt-2">{getReadingParts(t).length} Passage(s) • {getReadingQuestionCount(t)} Questions</p>
                                         </div>
                                     ))
                                 ) : curriculumMode === 'listening' ? (
@@ -955,7 +1277,12 @@
                                         <div key={t.id} className="bg-indigo-50/40 border border-indigo-200 p-4 rounded-xl relative group">
                                             <span className="absolute top-4 right-4 text-xs font-bold text-indigo-300 group-hover:hidden">ID:{t.id}</span>
                                             <button onClick={() => handleDeleteTest(t.id, 'writing')} className="absolute top-3 right-3 hidden group-hover:flex items-center justify-center w-6 h-6 bg-red-100 text-red-600 rounded-full hover:bg-red-500 hover:text-white transition">✕</button>
-                                            <span className="text-[10px] font-bold uppercase tracking-wider bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded">{t.taskType || 'Writing'}</span>
+                                            <div className="flex flex-wrap items-center gap-1.5">
+                                                <span className="text-[10px] font-bold uppercase tracking-wider bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded">{t.taskType || 'Writing'}</span>
+                                                {t.imageUrl && (
+                                                    <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 px-2 py-0.5 rounded">📊 Chart/Image</span>
+                                                )}
+                                            </div>
                                             <p className="font-semibold text-slate-800 text-sm leading-snug pr-6 mt-1.5">{t.title}</p>
                                             <p className="text-xs text-slate-500 mt-1">Min words: {t.minWords || 250} {t.sampleAnswer ? '• ✓ Sample Essay' : ''}</p>
                                         </div>
@@ -963,21 +1290,122 @@
                                 )}
                             </div>
                             <div className="lg:col-span-2 bg-slate-50 p-5 rounded-xl border border-slate-200">
-                                <div className="flex justify-between items-center mb-4">
+                                <div className="flex flex-wrap justify-between items-center gap-2 mb-4">
                                     <h3 className="font-bold text-slate-700 text-sm uppercase tracking-wider">
                                         {curriculumMode === 'reading' ? 'Reading Test JSON Editor' : curriculumMode === 'listening' ? 'Listening Test JSON Editor' : 'Writing Prompt JSON Editor'}
                                     </h3>
-                                    <button 
-                                        onClick={() => setTestJsonInput(
-                                            curriculumMode === 'reading' ? TEST_TEMPLATE : 
-                                            curriculumMode === 'listening' ? LISTENING_TEST_TEMPLATE : 
-                                            WRITING_TEST_TEMPLATE
-                                        )} 
-                                        className="text-xs bg-white border border-slate-300 text-slate-600 px-3 py-1.5 rounded-md font-semibold hover:bg-slate-100 transition"
-                                    >
-                                        Load {curriculumMode === 'reading' ? 'Reading' : curriculumMode === 'listening' ? 'Listening' : 'Writing'} Template
-                                    </button>
+                                    <div className="flex flex-wrap gap-2">
+                                        {curriculumMode === 'reading' && (
+                                            <>
+                                                <input
+                                                    ref={curriculumJsonFileRef}
+                                                    type="file"
+                                                    accept=".json,application/json"
+                                                    onChange={handleLoadCurriculumJsonFile}
+                                                    className="hidden"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => curriculumJsonFileRef.current?.click()}
+                                                    className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-1.5 rounded-md font-semibold hover:bg-emerald-100 transition"
+                                                >
+                                                    ↑ Chọn file JSON
+                                                </button>
+                                            </>
+                                        )}
+
+                                        {curriculumMode === 'writing' ? (
+                                            <>
+                                                <input
+                                                    ref={writingImageFileRef}
+                                                    type="file"
+                                                    accept="image/*"
+                                                    onChange={handleWritingImageUpload}
+                                                    className="hidden"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    disabled={isProcessingImage}
+                                                    onClick={() => writingImageFileRef.current?.click()}
+                                                    className="text-xs bg-amber-50 border border-amber-300 text-amber-800 px-3 py-1.5 rounded-md font-bold hover:bg-amber-100 transition flex items-center gap-1"
+                                                >
+                                                    <span>🖼️</span>
+                                                    <span>{isProcessingImage ? 'Đang nén ảnh...' : '+ Chọn ảnh Task 1 từ máy'}</span>
+                                                </button>
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => setTestJsonInput(WRITING_TASK1_TEMPLATE)} 
+                                                    className="text-xs bg-indigo-50 border border-indigo-200 text-indigo-700 px-3 py-1.5 rounded-md font-semibold hover:bg-indigo-100 transition"
+                                                >
+                                                    Load Task 1 Template
+                                                </button>
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => setTestJsonInput(WRITING_TEST_TEMPLATE)} 
+                                                    className="text-xs bg-white border border-slate-300 text-slate-600 px-3 py-1.5 rounded-md font-semibold hover:bg-slate-100 transition"
+                                                >
+                                                    Load Task 2 Template
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <button 
+                                                onClick={() => setTestJsonInput(
+                                                    curriculumMode === 'reading' ? TEST_TEMPLATE : LISTENING_TEST_TEMPLATE
+                                                )} 
+                                                className="text-xs bg-white border border-slate-300 text-slate-600 px-3 py-1.5 rounded-md font-semibold hover:bg-slate-100 transition"
+                                            >
+                                                Load {curriculumMode === 'reading' ? 'Reading' : 'Listening'} Template
+                                            </button>
+                                        )}
+                                    </div>
                                 </div>
+
+                                {curriculumMode === 'writing' && (
+                                    <div className="mb-4 bg-white border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                                        <div className="text-xs text-slate-600 space-y-1">
+                                            <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                                                <span>📊</span> Hướng dẫn Upload đề Writing Task 1 (Biểu đồ / Bản đồ / Quy trình):
+                                            </p>
+                                            <p>1. Bấm <strong>Load Task 1 Template</strong> để tạo khung chuẩn (150 từ).</p>
+                                            <p>2. Bấm <strong>+ Chọn ảnh Task 1 từ máy</strong> (hệ thống tự nén ảnh gọn nhẹ và gắn vào <code className="bg-slate-100 px-1 rounded">imageUrl</code>) hoặc dán link ảnh trực tiếp vào JSON.</p>
+                                        </div>
+                                        {previewWritingImageUrl && (
+                                            <div className="relative flex-shrink-0 border border-slate-200 rounded-lg p-1.5 bg-slate-50">
+                                                <img src={previewWritingImageUrl} alt="Task 1 Preview" className="h-24 w-auto object-contain rounded" />
+                                                <button
+                                                    type="button"
+                                                    onClick={handleRemoveWritingImage}
+                                                    className="absolute -top-2 -right-2 w-5 h-5 bg-red-500 text-white rounded-full text-[10px] font-bold flex items-center justify-center shadow hover:bg-red-600"
+                                                    title="Gỡ ảnh khỏi JSON"
+                                                >
+                                                    ✕
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {curriculumMode === 'reading' && (
+                                    <div className="grid md:grid-cols-2 gap-3 mb-4">
+                                        <div className="bg-white border border-indigo-200 rounded-xl p-4">
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <span className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center text-sm font-black">1</span>
+                                                <h4 className="text-sm font-bold text-slate-800">Multiple Choice (MCQ)</h4>
+                                            </div>
+                                            <p className="text-xs text-slate-500 mb-2">Học sinh chọn một đáp án A/B/C/D.</p>
+                                            <pre className="text-[11px] leading-relaxed bg-slate-50 border border-slate-100 rounded-lg p-2.5 overflow-x-auto">{`{ "q": "Question?", "options": ["A. ...", "B. ...", "C. ...", "D. ..."], "a": "B" }`}</pre>
+                                        </div>
+                                        <div className="bg-white border border-emerald-200 rounded-xl p-4">
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <span className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center text-sm font-black">2</span>
+                                                <h4 className="text-sm font-bold text-slate-800">Fill in the Blanks (Short Answer)</h4>
+                                            </div>
+                                            <p className="text-xs text-slate-600 mb-2">Học sinh tự điền 1–3 từ. Có thể đặt <code>minWords: 2</code> và <code>maxWords: 3</code>. Chấm không phân biệt chữ hoa/chữ thường.</p>
+                                            <pre className="text-[11px] leading-relaxed bg-slate-50 border border-slate-100 rounded-lg p-2.5 overflow-x-auto">{`{ "q": "Complete the sentence: ...", "a": "public transport", "answers": ["public transport", "mass transit"], "minWords": 2, "maxWords": 3 }`}</pre>
+                                            <p className="text-[11px] text-emerald-700 mt-2">Ví dụ: “Public Transport”, “PUBLIC TRANSPORT” và “public transport” đều được tính đúng.</p>
+                                        </div>
+                                    </div>
+                                )}
                                 <textarea 
                                     className="w-full h-72 font-mono text-[13px] border border-slate-300 p-4 rounded-lg bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none shadow-inner text-slate-700"
                                     placeholder={`Paste ${curriculumMode} test JSON here...`}
@@ -987,7 +1415,11 @@
                                 <div className="mt-4 flex justify-between items-center">
                                     {curriculumMode === 'listening' ? (
                                         <span className="text-xs text-slate-500">💡 Đảm bảo file <code className="bg-slate-200 px-1 rounded">audioFile</code> đã được đặt trong thư mục <code className="bg-slate-200 px-1 rounded">audio/</code> của project.</span>
-                                    ) : <span></span>}
+                                    ) : curriculumMode === 'reading' ? (
+                                        <span className="text-xs text-slate-500">💡 JSON Reading hỗ trợ cả <b>MCQ</b> và <b>FIB (điền 1–3 từ)</b>, trong từng Part.</span>
+                                    ) : (
+                                        <span className="text-xs text-slate-500">💡 Hỗ trợ cả <b>Writing Task 1 (kèm ảnh)</b> và <b>Writing Task 2</b>.</span>
+                                    )}
                                     <button onClick={handleAddTest} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-8 rounded-lg shadow-md hover:shadow-lg transition transform hover:-translate-y-0.5">
                                         Upload to {curriculumMode === 'reading' ? 'Reading' : curriculumMode === 'listening' ? 'Listening' : 'Writing'} Curriculum
                                     </button>
@@ -1029,10 +1461,10 @@
                                                 <span className="text-xs bg-white text-indigo-700 font-bold px-2.5 py-0.5 rounded-full border border-indigo-200">
                                                     {sub.wordCount} words
                                                 </span>
-                                                {(!sub.teacherFeedback || !sub.teacherFeedback.trim()) ? (
-                                                    <span className="text-[11px] font-bold bg-amber-100 text-amber-800 px-2.5 py-0.5 rounded-full">Chưa chấm</span>
+                                                {isWritingFeedbackPublished(sub) ? (
+                                                    <span className="text-[11px] font-bold bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full">Đã xuất bản</span>
                                                 ) : (
-                                                    <span className="text-[11px] font-bold bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full">Đã chấm</span>
+                                                    <span className="text-[11px] font-bold bg-amber-100 text-amber-800 px-2.5 py-0.5 rounded-full">{sub.teacherFeedbackDraft || sub.teacherFeedback ? (sub.teacherFeedbackPublished ? 'Có bản nháp mới' : 'Bản nháp - chưa xuất bản') : 'Chưa chấm'}</span>
                                                 )}
                                             </div>
                                             <span className="text-xs font-semibold text-slate-400 bg-white px-2 py-1 rounded border shadow-sm">{new Date(sub.date).toLocaleString('vi-VN')}</span>
@@ -1117,13 +1549,25 @@
                                                     className="w-full border border-indigo-200 p-3 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm bg-white text-slate-700" 
                                                     rows="4" 
                                                     placeholder="Enter band score (TA, CC, LR, GRA) and overall feedback for the student..."
-                                                    value={writingFeedbackInputs[sub.subId] !== undefined ? writingFeedbackInputs[sub.subId] : (sub.teacherFeedback || '')}
+                                                    value={writingFeedbackInputs[sub.subId] !== undefined ? writingFeedbackInputs[sub.subId] : (sub.teacherFeedbackDraft ?? sub.teacherFeedback ?? '')}
                                                     onChange={(e) => setWritingFeedbackInputs({...writingFeedbackInputs, [sub.subId]: e.target.value})}
                                                 ></textarea>
-                                                <div className="mt-3 flex justify-end">
-                                                    <button onClick={() => submitWritingTeacherFeedback(sub.subId)} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-md text-sm font-bold shadow-sm transition">
-                                                        Save Teacher Feedback
-                                                    </button>
+                                                <div className="mt-3 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                                                    <p className="text-[11px] text-slate-500">Save Draft chỉ lưu cho giáo viên. Học sinh chỉ nhìn thấy nhận xét sau khi bấm Publish Feedback.</p>
+                                                    <div className="flex gap-2 flex-shrink-0">
+                                                        <button
+                                                            onClick={() => submitWritingTeacherFeedback(sub.subId, false)}
+                                                            className="bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 px-4 py-2 rounded-md text-sm font-bold transition"
+                                                        >
+                                                            Save Draft
+                                                        </button>
+                                                        <button
+                                                            onClick={() => submitWritingTeacherFeedback(sub.subId, true)}
+                                                            className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2 rounded-md text-sm font-bold shadow-sm transition"
+                                                        >
+                                                            Publish Feedback
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
@@ -1287,7 +1731,6 @@
                         </div>
 
                         <div className="p-8 md:p-10 space-y-6 pb-24">
-                            {/* Audio Player Card */}
                             <div className="bg-slate-900 text-white p-6 rounded-3xl shadow-xl border border-slate-800 space-y-4">
                                 <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-3">
@@ -1311,7 +1754,6 @@
                                     Your browser does not support the audio element.
                                 </audio>
 
-                                {/* Playback Controls: Skip & Speed */}
                                 <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800 text-xs">
                                     <div className="flex items-center gap-2">
                                         <button
@@ -1350,7 +1792,6 @@
                                 </div>
                             </div>
 
-                            {/* Transcript / Audio Script Box */}
                             {test.script && (
                                 <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
                                     <div className="bg-slate-50 px-6 py-3.5 border-b border-slate-200 flex justify-between items-center">
@@ -1765,7 +2206,296 @@
                 </div>
             );
         }
+        // ==========================================
+// 🍳 VOCAB KITCHEN – Game nấu ăn bằng từ vựng (3D với three.js)
+// Dán nguyên khối này NGAY TRƯỚC dòng:  function StudentDashboard(
+// ==========================================
+function VocabCookingGame({ data, savedVocab = [], currentUser }) {
+    const FOODS = ['🍅','🥕','🌽','🍄','🧅','🥔','🌶️','🥦','🧄','🍋','🥩','🐟','🦐','🥚','🧀','🍆'];
+    const DISHES = ['Phở bò','Spaghetti','Cà ri gà','Sushi','Pizza','Lẩu Thái','Paella','Ramen'];
+    const ROUND = 8, TIME = 15;
+    const bestKey = `vocab_kitchen_best_${currentUser.username}`;
 
+    const pool = useMemo(() => {
+        const m = new Map();
+        (savedVocab || []).forEach(v => v.w && v.m && m.set(v.w.toLowerCase(), { w: v.w, m: v.m }));
+        (data.tests || []).forEach(t => getReadingParts(t).forEach(p => p.vocab.forEach(v => {
+            if (v.w && v.m && !m.has(v.w.toLowerCase())) m.set(v.w.toLowerCase(), { w: v.w, m: v.m });
+        })));
+        return [...m.values()];
+    }, [data.tests, savedVocab]);
+
+    const [phase, setPhase] = useState('menu');
+    const [mode, setMode] = useState('en2vi');
+    const [qs, setQs] = useState([]);
+    const [idx, setIdx] = useState(0);
+    const [lives, setLives] = useState(3);
+    const [score, setScore] = useState(0);
+    const [streak, setStreak] = useState(0);
+    const [correct, setCorrect] = useState(0);
+    const [t, setT] = useState(TIME);
+    const [pick, setPick] = useState(null);
+    const [dish, setDish] = useState(DISHES[0]);
+    const [best, setBest] = useState(() => Number(localStorage.getItem(bestKey)) || 0);
+    const mountRef = useRef(null);
+    const api = useRef({});
+
+    // ---------- 3D SCENE ----------
+    useEffect(() => {
+        const el = mountRef.current;
+        if (!el || !window.THREE) return;
+        const T = window.THREE;
+        const W = el.clientWidth, H = el.clientHeight;
+        const renderer = new T.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(W, H);
+        renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+        renderer.shadowMap.enabled = true;
+        el.appendChild(renderer.domElement);
+        const scene = new T.Scene();
+        const cam = new T.PerspectiveCamera(40, W / H, 0.1, 50);
+        cam.position.set(0, 3.4, 7.2);
+        scene.add(new T.AmbientLight(0xffffff, 0.6));
+        const sun = new T.DirectionalLight(0xfff1d6, 0.9);
+        sun.position.set(4, 8, 5); sun.castShadow = true; scene.add(sun);
+        const fire = new T.PointLight(0xff7a18, 1.8, 7); fire.position.set(0, 0.8, 0); scene.add(fire);
+        const M = (c, o = {}) => new T.MeshStandardMaterial(Object.assign({ color: c, roughness: 0.5, metalness: 0.2 }, o));
+
+        const table = new T.Mesh(new T.BoxGeometry(10, 0.5, 4.5), M(0x8b5a2b, { roughness: 0.85, metalness: 0 }));
+        table.position.y = -0.25; table.receiveShadow = true; scene.add(table);
+        const stove = new T.Mesh(new T.CylinderGeometry(1.8, 2, 0.5, 32), M(0x1f2937, { metalness: 0.6 }));
+        stove.position.y = 0.25; scene.add(stove);
+
+        const pot = new T.Group(); pot.position.y = 0.5; scene.add(pot);
+        const body = new T.Mesh(new T.CylinderGeometry(1.35, 1.15, 1.5, 40, 1, true), M(0xcbd5e1, { metalness: 0.85, roughness: 0.25, side: T.DoubleSide }));
+        body.position.y = 0.75; body.castShadow = true; pot.add(body);
+        const bottom = new T.Mesh(new T.CircleGeometry(1.15, 40), M(0x94a3b8, { metalness: 0.8 }));
+        bottom.rotation.x = -Math.PI / 2; bottom.position.y = 0.02; pot.add(bottom);
+        const rim = new T.Mesh(new T.TorusGeometry(1.35, 0.08, 12, 48), M(0xe2e8f0, { metalness: 0.9, roughness: 0.2 }));
+        rim.rotation.x = Math.PI / 2; rim.position.y = 1.5; pot.add(rim);
+        [-1, 1].forEach(s => { const h = new T.Mesh(new T.TorusGeometry(0.28, 0.07, 10, 20), M(0x334155)); h.position.set(s * 1.5, 1.15, 0); pot.add(h); });
+        const soupMat = M(0x38bdf8, { emissive: 0x0c4a6e, emissiveIntensity: 0.4, roughness: 0.1 });
+        const soup = new T.Mesh(new T.CylinderGeometry(1.28, 1.18, 0.05, 40), soupMat);
+        soup.position.y = 0.25; pot.add(soup);
+
+        const flames = [];
+        for (let i = 0; i < 14; i++) {
+            const a = (i / 14) * Math.PI * 2;
+            const f = new T.Mesh(new T.ConeGeometry(0.16, 0.6, 8), new T.MeshBasicMaterial({ color: i % 2 ? 0xff7a18 : 0xfacc15, transparent: true, opacity: 0.9 }));
+            f.position.set(Math.cos(a) * 1.0, 0.75, Math.sin(a) * 1.0); f.userData.p = Math.random() * 6; scene.add(f); flames.push(f);
+        }
+        const steam = [];
+        for (let i = 0; i < 16; i++) {
+            const s = new T.Mesh(new T.SphereGeometry(0.22, 12, 12), new T.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.25 }));
+            s.userData = { p: Math.random(), x: (Math.random() - 0.5) * 1.6, z: (Math.random() - 0.5) * 1.2 }; scene.add(s); steam.push(s);
+        }
+        const texCache = {};
+        const emojiTex = (e) => {
+            if (texCache[e]) return texCache[e];
+            const c = document.createElement('canvas'); c.width = c.height = 128;
+            const x = c.getContext('2d'); x.font = '96px serif'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(e, 64, 70);
+            return (texCache[e] = new T.CanvasTexture(c));
+        };
+        const falling = [], sparks = [];
+        let shake = 0, fill = 0, flash = 0;
+
+        api.current = {
+            drop: (e) => {
+                const sp = new T.Sprite(new T.SpriteMaterial({ map: emojiTex(e), transparent: true }));
+                sp.scale.set(1.2, 1.2, 1); sp.position.set((Math.random() - 0.5) * 0.8, 5, 0.3); sp.userData.vy = 0; falling.push(sp); scene.add(sp);
+            },
+            shake: () => { shake = 1; flash = 1; },
+            fill: (p) => { fill = p; },
+            reset: () => { fill = 0; },
+        };
+        const splash = () => {
+            for (let i = 0; i < 12; i++) {
+                const s = new T.Mesh(new T.SphereGeometry(0.07, 8, 8), new T.MeshBasicMaterial({ color: 0x7dd3fc }));
+                s.position.set((Math.random() - 0.5) * 0.8, soup.position.y + 0.9, 0);
+                s.userData = { vx: (Math.random() - 0.5) * 0.08, vy: 0.08 + Math.random() * 0.08, life: 1 };
+                sparks.push(s); scene.add(s);
+            }
+        };
+
+        let raf, time = 0;
+        const loop = () => {
+            raf = requestAnimationFrame(loop); time += 0.016;
+            cam.position.x = Math.sin(time * 0.35) * 1.4; cam.lookAt(0, 1.2, 0);
+            flames.forEach(f => { const k = 0.8 + Math.sin(time * 9 + f.userData.p) * 0.35; f.scale.set(1, k, 1); });
+            fire.intensity = 1.6 + Math.sin(time * 12) * 0.35;
+            steam.forEach(s => {
+                const d = s.userData; d.p = (d.p + 0.004) % 1;
+                s.position.set(d.x * d.p, soup.position.y + 0.6 + d.p * 3, d.z * d.p);
+                s.material.opacity = 0.28 * (1 - d.p); s.scale.setScalar(0.6 + d.p * 1.4);
+            });
+            const target = 0.25 + fill * 1.05; soup.position.y += (target - soup.position.y) * 0.06;
+            for (let i = falling.length - 1; i >= 0; i--) {
+                const f = falling[i]; f.userData.vy -= 0.008; f.position.y += f.userData.vy; f.material.rotation += 0.05;
+                if (f.position.y < soup.position.y + 0.9) { splash(); scene.remove(f); falling.splice(i, 1); }
+            }
+            for (let i = sparks.length - 1; i >= 0; i--) {
+                const s = sparks[i], d = s.userData; d.vy -= 0.006; s.position.x += d.vx; s.position.y += d.vy; d.life -= 0.025;
+                if (d.life <= 0) { scene.remove(s); sparks.splice(i, 1); }
+            }
+            if (shake > 0) { pot.rotation.z = Math.sin(time * 60) * 0.08 * shake; shake -= 0.04; } else pot.rotation.z = 0;
+            if (flash > 0) { soupMat.color.setHex(0xef4444); flash -= 0.02; } else soupMat.color.lerp(new T.Color(0x38bdf8), 0.05);
+            renderer.render(scene, cam);
+        };
+        loop();
+        const onResize = () => { const w = el.clientWidth, h = el.clientHeight; renderer.setSize(w, h); cam.aspect = w / h; cam.updateProjectionMatrix(); };
+        window.addEventListener('resize', onResize);
+        return () => {
+            cancelAnimationFrame(raf); window.removeEventListener('resize', onResize);
+            renderer.dispose(); if (renderer.domElement.parentNode === el) el.removeChild(renderer.domElement);
+            api.current = {};
+        };
+    }, []);
+
+    // ---------- GAME LOGIC ----------
+    const q = qs[idx];
+
+    const start = () => {
+        const picked = [...pool].sort(() => Math.random() - 0.5).slice(0, ROUND);
+        setQs(picked.map(tg => {
+            const base = Math.floor(Math.random() * FOODS.length);
+            const opts = [tg, ...pool.filter(p => p.w !== tg.w).sort(() => Math.random() - 0.5).slice(0, 3)]
+                .sort(() => Math.random() - 0.5).map((o, j) => ({ ...o, e: FOODS[(base + j * 3) % FOODS.length] }));
+            return { tg, opts };
+        }));
+        setDish(DISHES[Math.floor(Math.random() * DISHES.length)]);
+        setIdx(0); setLives(3); setScore(0); setStreak(0); setCorrect(0); setPick(null); setT(TIME);
+        api.current.reset && api.current.reset();
+        setPhase('play');
+    };
+
+    const finish = (finalScore) => {
+        if (finalScore > best) { setBest(finalScore); localStorage.setItem(bestKey, String(finalScore)); }
+        setPhase('end');
+    };
+
+    const answer = (opt) => {
+        if (pick !== null || !q) return;
+        const ok = !!opt && opt.w === q.tg.w;
+        setPick(opt ? opt.w : '__timeout');
+        let newScore = score, newLives = lives;
+        if (ok) {
+            newScore = score + 10 + Math.max(0, t) + streak * 2;
+            setScore(newScore); setStreak(streak + 1); setCorrect(c => c + 1);
+            api.current.drop && api.current.drop(opt.e);
+            api.current.fill && api.current.fill((correct + 1) / qs.length);
+        } else {
+            newLives = lives - 1; setLives(newLives); setStreak(0);
+            api.current.shake && api.current.shake();
+        }
+        setTimeout(() => {
+            if (newLives <= 0 || idx + 1 >= qs.length) finish(newScore);
+            else { setIdx(idx + 1); setPick(null); setT(TIME); }
+        }, 1200);
+    };
+
+    useEffect(() => {
+        if (phase !== 'play' || pick !== null) return;
+        if (t <= 0) { answer(null); return; }
+        const id = setTimeout(() => setT(x => x - 1), 1000);
+        return () => clearTimeout(id);
+    }, [t, phase, pick]);
+
+    const stars = correct >= qs.length ? 3 : correct >= Math.ceil(qs.length * 0.6) ? 2 : correct > 0 ? 1 : 0;
+    const label = (o) => (mode === 'en2vi' ? o.m : o.w);
+
+    return (
+        <div className="pb-20 max-w-3xl mx-auto">
+            <div className="rounded-3xl overflow-hidden shadow-2xl border border-indigo-900/30 bg-gradient-to-b from-indigo-950 via-purple-900 to-orange-700 relative">
+                <div ref={mountRef} className="w-full h-[300px] sm:h-[340px]"></div>
+
+                {/* HUD */}
+                {phase === 'play' && (
+                    <div className="absolute top-3 left-3 right-3 flex justify-between items-start text-white pointer-events-none">
+                        <div className="bg-black/40 backdrop-blur px-3 py-1.5 rounded-full text-sm font-bold">
+                            {'❤️'.repeat(Math.max(0, lives))}{'🖤'.repeat(Math.max(0, 3 - lives))}
+                        </div>
+                        <div className="text-center">
+                            <div className="bg-black/40 backdrop-blur px-4 py-1.5 rounded-full text-xs font-bold">🍽️ {dish} · {idx + 1}/{qs.length}</div>
+                            <div className="mt-1.5 h-2 w-40 bg-white/20 rounded-full overflow-hidden"><div className="h-full bg-emerald-400 transition-all duration-700" style={{ width: `${(correct / Math.max(1, qs.length)) * 100}%` }}></div></div>
+                        </div>
+                        <div className="bg-black/40 backdrop-blur px-3 py-1.5 rounded-full text-sm font-black">⭐ {score}{streak > 1 ? <span className="text-amber-300 ml-1">🔥x{streak}</span> : null}</div>
+                    </div>
+                )}
+
+                {/* MENU / END overlay */}
+                {phase !== 'play' && (
+                    <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-sm flex flex-col items-center justify-center text-center text-white px-6">
+                        {phase === 'menu' ? (
+                            <>
+                                <div className="text-5xl mb-2">👨‍🍳</div>
+                                <h2 className="text-3xl font-black tracking-tight">Vocab Kitchen</h2>
+                                <p className="text-sm text-indigo-100/90 mt-1 max-w-sm">Chọn đúng nguyên liệu (nghĩa của từ) để thả vào nồi. Chọn sai là cháy nồi! Hết 3 mạng là thua.</p>
+                                {pool.length < 4 ? (
+                                    <p className="mt-4 bg-amber-400/20 border border-amber-300/50 px-4 py-2 rounded-xl text-sm">Cần ít nhất 4 từ vựng (đề Reading hoặc sổ tay) để bắt đầu.</p>
+                                ) : (
+                                    <>
+                                        <div className="flex bg-white/10 p-1 rounded-xl mt-4 text-xs font-bold">
+                                            <button onClick={() => setMode('en2vi')} className={`px-4 py-2 rounded-lg transition ${mode === 'en2vi' ? 'bg-white text-indigo-800' : 'text-white/80'}`}>Anh → Việt</button>
+                                            <button onClick={() => setMode('vi2en')} className={`px-4 py-2 rounded-lg transition ${mode === 'vi2en' ? 'bg-white text-indigo-800' : 'text-white/80'}`}>Việt → Anh</button>
+                                        </div>
+                                        <button onClick={start} className="mt-4 bg-gradient-to-r from-orange-500 to-amber-400 hover:scale-105 active:scale-95 transition text-slate-900 font-black px-10 py-3.5 rounded-2xl shadow-xl text-lg">🔥 Bắt đầu nấu!</button>
+                                        <p className="text-xs text-white/70 mt-3">{pool.length} từ trong kho • Điểm cao nhất: {best}</p>
+                                    </>
+                                )}
+                            </>
+                        ) : (
+                            <>
+                                <div className="text-5xl mb-1">{lives <= 0 ? '🔥' : '🍲'}</div>
+                                <h2 className="text-2xl font-black">{lives <= 0 ? 'Cháy bếp rồi!' : `${dish} hoàn thành!`}</h2>
+                                <div className="text-4xl my-2">{[0, 1, 2].map(i => <span key={i} className={i < stars ? '' : 'opacity-25 grayscale'}>⭐</span>)}</div>
+                                <p className="text-sm">Đúng {correct}/{qs.length} • Điểm <b>{score}</b> {score >= best && score > 0 ? '🏆 Kỷ lục mới!' : `(Cao nhất: ${best})`}</p>
+                                <div className="flex gap-3 mt-4">
+                                    <button onClick={start} className="bg-gradient-to-r from-orange-500 to-amber-400 text-slate-900 font-black px-7 py-3 rounded-2xl shadow-lg hover:scale-105 transition">Nấu món mới ↺</button>
+                                    <button onClick={() => setPhase('menu')} className="bg-white/15 hover:bg-white/25 font-bold px-6 py-3 rounded-2xl transition">Menu</button>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                )}
+            </div>
+
+            {/* ORDER + INGREDIENTS */}
+            {phase === 'play' && q && (
+                <div className="mt-6 space-y-5">
+                    <div className="relative bg-[#FDFBF7] border-2 border-dashed border-amber-300 rounded-2xl p-5 shadow-lg text-center">
+                        <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-amber-400 text-amber-950 text-[11px] font-black px-3 py-0.5 rounded-full tracking-wider">PHIẾU ORDER</span>
+                        <p className="text-xs text-slate-500 mb-1">{mode === 'en2vi' ? 'Tìm nguyên liệu có nghĩa của từ:' : 'Tìm nguyên liệu là từ tiếng Anh có nghĩa:'}</p>
+                        <div className="flex items-center justify-center gap-3">
+                            <h3 className="text-3xl font-black text-slate-800 font-serif">{mode === 'en2vi' ? q.tg.w : q.tg.m}</h3>
+                            {mode === 'en2vi' && <button onClick={(e) => speakWord(q.tg.w, e)} className="text-xl hover:scale-125 transition">🔊</button>}
+                        </div>
+                        <div className="mt-3 h-2.5 bg-slate-200 rounded-full overflow-hidden">
+                            <div className={`h-full transition-all duration-1000 ease-linear ${t <= 5 ? 'bg-red-500' : 'bg-emerald-500'}`} style={{ width: `${(t / TIME) * 100}%` }}></div>
+                        </div>
+                        <p className={`text-xs font-bold mt-1 ${t <= 5 ? 'text-red-600 animate-pulse' : 'text-slate-400'}`}>🔥 Lửa đang cháy… còn {Math.max(0, t)}s</p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                        {q.opts.map((o, i) => {
+                            const isRight = o.w === q.tg.w;
+                            let st = 'bg-white border-slate-200 hover:-translate-y-1 hover:shadow-xl hover:border-orange-300';
+                            if (pick !== null) {
+                                if (isRight) st = 'bg-emerald-50 border-emerald-500 scale-105 shadow-xl';
+                                else if (pick === o.w) st = 'bg-red-50 border-red-500 animate-pulse';
+                                else st = 'bg-white border-slate-200 opacity-50';
+                            }
+                            return (
+                                <button key={i} disabled={pick !== null} onClick={() => answer(o)} className={`rounded-2xl border-2 p-4 min-h-[130px] flex flex-col items-center justify-center gap-2 shadow-md transition-all duration-200 ${st}`}>
+                                    <span className="text-5xl drop-shadow-md">{o.e}</span>
+                                    <span className="text-sm font-bold text-slate-700 leading-snug">{label(o)}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
         // ==========================================
         // STUDENT DASHBOARD (Reading + Listening + Writing + Vocab)
         // ==========================================
@@ -1785,7 +2515,7 @@
             const totalCompleted = userScores.length + userListeningScores.length + userWritingSubs.length;
             const readingPercentages = userScores.map(s => {
                 const t = data.tests.find(item => item.id === s.testId);
-                const max = t ? (t.mcq.length + (t.fib?.length || 0)) : 20;
+                const max = t ? getReadingQuestionCount(t) : (s.maxScore || 20);
                 return {
                     title: s.testTitle,
                     score: s.score,
@@ -1912,29 +2642,41 @@
                                 <span>✍️</span> Writing
                             </button>
                             <button
-                                onClick={() => setActiveTab('vocab')}
-                                className={`px-4 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2 ${
-                                    activeTab === 'vocab'
-                                        ? 'bg-amber-500 text-white shadow-md'
-                                        : 'text-slate-600 hover:text-slate-900'
-                                }`}
-                            >
-                                <span>🃏</span> Flashcards
-                                {savedVocab.length > 0 && (
-                                    <span className={`text-xs px-2 py-0.5 rounded-full ${activeTab === 'vocab' ? 'bg-white text-amber-700' : 'bg-amber-100 text-amber-800'}`}>
-                                        {savedVocab.length}
-                                    </span>
-                                )}
-                            </button>
+    onClick={() => setActiveTab('game')}
+    className={`px-4 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2 ${
+        activeTab === 'game'
+            ? 'bg-orange-500 text-white shadow-md'
+            : 'text-slate-600 hover:text-slate-900'
+    }`}
+>
+    <span>🍳</span> Game
+</button>
+<button
+    onClick={() => setActiveTab('vocab')}
+    className={`px-4 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2 ${
+        activeTab === 'vocab'
+            ? 'bg-amber-500 text-white shadow-md'
+            : 'text-slate-600 hover:text-slate-900'
+    }`}
+>
+    <span>🃏</span> Flashcards
+    {savedVocab.length > 0 && (
+        <span className={`text-xs px-2 py-0.5 rounded-full ${activeTab === 'vocab' ? 'bg-white text-amber-700' : 'bg-amber-100 text-amber-800'}`}>
+            {savedVocab.length}
+        </span>
+    )}
+</button>
                         </div>
                     </div>
-
-                    {activeTab === 'vocab' ? (
-                        <VocabularyFlashcards 
-                            savedVocab={savedVocab} 
-                            onSaveVocab={onSaveVocab} 
-                            onRemoveVocab={onRemoveVocab} 
-                        />
+                    
+                    {activeTab === 'game' ? (
+    <VocabCookingGame data={data} savedVocab={savedVocab} currentUser={currentUser} />
+) : activeTab === 'vocab' ? (
+    <VocabularyFlashcards 
+        savedVocab={savedVocab} 
+        onSaveVocab={onSaveVocab} 
+        onRemoveVocab={onRemoveVocab} 
+    />
                     ) : (
                         <>
                             {/* Timer Mode Selector */}
@@ -1995,7 +2737,7 @@
                                     {filteredReadingTests.map((test) => {
                                         const testScores = userScores.filter(s => s.testId === test.id);
                                         const latest = testScores.length > 0 ? testScores[testScores.length - 1] : null;
-                                        const max = test.mcq.length + (test.fib?.length || 0);
+                                        const max = getReadingQuestionCount(test);
                                         const best = testScores.length > 0 ? Math.max(...testScores.map(s => s.score)) : null;
 
                                         return (
@@ -2010,7 +2752,8 @@
                                                         )}
                                                     </div>
                                                     <h3 className="text-xl font-bold text-slate-800 mb-2 leading-snug">{test.title.split(': ').pop()}</h3>
-                                                    <p className="text-sm text-slate-500 line-clamp-2 mb-6 leading-relaxed">{test.passage.substring(0,100)}...</p>
+                                                    <p className="text-sm text-slate-500 line-clamp-2 mb-6 leading-relaxed">{getReadingPreview(test).substring(0,100)}...</p>
+                                                    <p className="text-xs text-indigo-600 font-semibold mb-4">{getReadingParts(test).length} separate reading passage(s) • {max} questions</p>
                                                 </div>
                                                 
                                                 <div className="flex gap-3 mt-auto">
@@ -2089,20 +2832,27 @@
                                         return (
                                             <div key={wTest.id} className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm hover:shadow-xl hover:border-indigo-300 transition-all duration-300 transform hover:-translate-y-1 flex flex-col justify-between">
                                                 <div>
-                                                    <div className="flex justify-between items-start mb-4">
-                                                        <span className="bg-purple-50 text-purple-700 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wide">
-                                                            {wTest.taskType || `Writing Task ${index + 1}`}
-                                                        </span>
+                                                    <div className="flex justify-between items-start mb-4 gap-2">
+                                                        <div className="flex flex-wrap items-center gap-1.5">
+                                                            <span className="bg-purple-50 text-purple-700 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-wide">
+                                                                {wTest.taskType || `Writing Task ${index + 1}`}
+                                                            </span>
+                                                            {wTest.imageUrl && (
+                                                                <span className="bg-amber-50 text-amber-800 border border-amber-200 text-[11px] font-bold px-2.5 py-0.5 rounded-full">
+                                                                    📊 Chart/Visual
+                                                                </span>
+                                                            )}
+                                                        </div>
                                                         {latest && (
-                                                            <span className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-md border ${latest.teacherFeedback ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-amber-700 bg-amber-50 border-amber-200'}`}>
-                                                                {latest.teacherFeedback ? '✓ Đã chấm' : '⏳ Đã nộp'}
+                                                            <span className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-md border flex-shrink-0 ${latest.teacherFeedbackPublished ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-amber-700 bg-amber-50 border-amber-200'}`}>
+                                                                {latest.teacherFeedbackPublished ? '✓ Đã nhận feedback' : '⏳ Chờ feedback'}
                                                             </span>
                                                         )}
                                                     </div>
                                                     <h3 className="text-xl font-bold text-slate-800 mb-2 leading-snug">{wTest.title}</h3>
                                                     <p className="text-sm text-slate-500 line-clamp-3 mb-4 leading-relaxed">{wTest.prompt}</p>
                                                     <div className="text-xs font-semibold text-slate-400 mb-6 flex items-center gap-2">
-                                                        <span>Target: At least {wTest.minWords || 250} words</span>
+                                                        <span>Target: At least {wTest.minWords || (wTest.imageUrl ? 150 : 250)} words</span>
                                                         {(wTest.sampleAnswer || wTest.outline) && (
                                                             <span className="bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded">• Có bài mẫu sau khi nộp</span>
                                                         )}
@@ -2156,7 +2906,7 @@
             const [timeLeft, setTimeLeft] = useState(initialTime);
 
             const words = essayText.trim() ? essayText.trim().split(/\s+/).length : 0;
-            const minWords = test.minWords || 250;
+            const minWords = test.minWords || (test.imageUrl ? 150 : 250);
 
             useEffect(() => {
                 if (reviewSubmission || isSubmitted) return;
@@ -2203,8 +2953,11 @@
                     essayText: essayText.trim(),
                     wordCount: words,
                     aiFeedback: null,
-                    teacherFeedback: reviewSubmission?.teacherFeedback || '',
-                    corrections: reviewSubmission?.corrections || [],
+                    teacherFeedback: '',
+                    teacherFeedbackDraft: '',
+                    teacherFeedbackPublished: false,
+                    teacherFeedbackPublishedAt: null,
+                    corrections: [],
                     date: new Date().toISOString()
                 };
 
@@ -2224,7 +2977,10 @@
                 alert("Nộp bài thành công! Bài viết đã được gửi đến giáo viên và Bài mẫu tham khảo đã được mở khóa.");
             };
 
-            const currentSub = (data.writingSubmissions || []).find(s => s.testId === test.id && s.username === currentUser.username) || reviewSubmission;
+            const studentSubmissions = (data.writingSubmissions || []).filter(s => s.testId === test.id && s.username === currentUser.username);
+            const currentSub = reviewSubmission
+                ? (studentSubmissions.find(s => s.subId === reviewSubmission.subId) || reviewSubmission)
+                : studentSubmissions[studentSubmissions.length - 1];
             const hasModelContent = !!(test.sampleAnswer || test.outline);
 
             return (
@@ -2252,8 +3008,8 @@
                                 <p className="text-slate-800 font-serif text-[1.05rem] leading-relaxed whitespace-pre-wrap">{test.prompt}</p>
                                 
                                 {test.imageUrl && (
-                                    <div className="mt-4">
-                                        <img src={test.imageUrl} alt="Writing Task Prompt Visual" className="rounded-xl border border-slate-200 max-w-full mx-auto" />
+                                    <div className="mt-5 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                                        <img src={test.imageUrl} alt="Writing Task 1 Chart or Diagram" className="rounded-lg max-w-full mx-auto shadow-sm" />
                                     </div>
                                 )}
 
@@ -2300,7 +3056,7 @@
                                     </div>
                                 )}
 
-                                {currentSub?.teacherFeedback && (
+                                {currentSub?.teacherFeedbackPublished === true && currentSub?.teacherFeedback && (
                                     <div className="p-6 bg-indigo-50 border border-indigo-200 rounded-2xl shadow-sm">
                                         <h4 className="font-bold text-indigo-900 text-sm mb-2 flex items-center gap-2">
                                             <span>👩‍🏫</span> Nhận xét từ Giáo viên
@@ -2416,107 +3172,158 @@
         // READING TEST INTERFACE
         // ==========================================
         function StudentTest({ test, currentUser, data, saveData, reviewSubmission, timeLimit, onFinish, savedVocab = [], onSaveVocab }) {
-            const [answers, setAnswers] = useState({});
+            const readingParts = useMemo(() => getReadingParts(test), [test]);
+            const [activePartIndex, setActivePartIndex] = useState(0);
+            const activePart = readingParts[Math.min(activePartIndex, readingParts.length - 1)] || readingParts[0];
+
+            const [answers, setAnswers] = useState(() => reviewSubmission?.answers ? { ...reviewSubmission.answers } : {});
             const [locked, setLocked] = useState({});
             const [submitted, setSubmitted] = useState(!!reviewSubmission);
             const [score, setScore] = useState(reviewSubmission ? reviewSubmission.score : 0);
             const [writingAnswer, setWritingAnswer] = useState(reviewSubmission ? (reviewSubmission.writingAnswer || '') : '');
-            
-            const [activeWordIndex, setActiveWordIndex] = useState(null); 
+
+            const [activeWordIndex, setActiveWordIndex] = useState(null);
             const [highlightToolbar, setHighlightToolbar] = useState(null);
             const [highlightCount, setHighlightCount] = useState(0);
             const passageContainerRef = useRef(null);
+            const questionContainerRef = useRef(null);
 
             const [notesOpen, setNotesOpen] = useState(false);
             const [notesText, setNotesText] = useState(() => {
                 return localStorage.getItem(`reading_notes_${currentUser.username}_${test.id}`) || '';
             });
-            
+
             const initialTime = timeLimit ? timeLimit * 60 : 0;
             const [timeLeft, setTimeLeft] = useState(initialTime);
-
-            const maxScore = test.mcq.length + (test.fib?.length || 0);
+            const maxScore = getReadingQuestionCount(test);
 
             useEffect(() => {
                 localStorage.setItem(`reading_notes_${currentUser.username}_${test.id}`, notesText);
             }, [notesText, currentUser.username, test.id]);
 
             useEffect(() => {
-                if (reviewSubmission) {
-                    const loadedAnswers = {};
-                    const loadedLocked = {};
-                    test.mcq.forEach((q, i) => { loadedAnswers[`mcq_${i}`] = q.a; loadedLocked[`mcq_${i}`] = true; });
-                    if(test.fib) test.fib.forEach((q, i) => { loadedAnswers[`fib_${i}`] = q.a.toLowerCase(); loadedLocked[`fib_${i}`] = true; });
-                    setAnswers(loadedAnswers);
-                    setLocked(loadedLocked);
-                }
+                if (!reviewSubmission) return;
+                const loadedAnswers = reviewSubmission.answers ? { ...reviewSubmission.answers } : {};
+                const loadedLocked = {};
+                readingParts.forEach((part, partIndex) => {
+                    part.mcq.forEach((q, i) => {
+                        const key = `mcq_${partIndex}_${i}`;
+                        if (loadedAnswers[key] === undefined) loadedAnswers[key] = q.a;
+                        loadedLocked[key] = true;
+                    });
+                    part.fib.forEach((q, i) => {
+                        const key = `fib_${partIndex}_${i}`;
+                        if (loadedAnswers[key] === undefined) loadedAnswers[key] = getFIBAcceptedAnswers(q)[0] || '';
+                        loadedLocked[key] = true;
+                    });
+                });
+                setAnswers(loadedAnswers);
+                setLocked(loadedLocked);
             }, [reviewSubmission, test]);
 
             useEffect(() => {
+                setActiveWordIndex(null);
+                setHighlightToolbar(null);
+                setHighlightCount(0);
+            }, [activePartIndex]);
+
+            useEffect(() => {
                 if (!timeLimit || submitted || reviewSubmission) return;
-                
                 if (timeLeft <= 0) {
                     submitTest();
                     return;
                 }
-                
-                const timerId = setInterval(() => {
-                    setTimeLeft(prev => prev - 1);
-                }, 1000);
-                
+                const timerId = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
                 return () => clearInterval(timerId);
             }, [timeLeft, timeLimit, submitted, reviewSubmission]);
 
             const formatTime = (seconds) => {
                 const m = Math.floor(seconds / 60);
-                const s = seconds % 60;
-                return `${m}:${s.toString().padStart(2, '0')}`;
+                const sec = seconds % 60;
+                return `${m}:${sec.toString().padStart(2, '0')}`;
             };
 
-            const handleMCQ = (qIndex, optionLetter) => {
-                if (locked[`mcq_${qIndex}`]) return;
-                setAnswers(prev => ({ ...prev, [`mcq_${qIndex}`]: optionLetter }));
+            const handleMCQ = (partIndex, qIndex, optionLetter) => {
+                const key = `mcq_${partIndex}_${qIndex}`;
+                if (locked[key] || submitted) return;
+                setAnswers(prev => ({ ...prev, [key]: optionLetter }));
             };
 
-            const handleFIB = (qIndex, word) => {
-                if (locked[`fib_${qIndex}`]) return;
-                setAnswers(prev => ({ ...prev, [`fib_${qIndex}`]: word.toLowerCase().trim() }));
+            const handleFIB = (partIndex, qIndex, word) => {
+                const key = `fib_${partIndex}_${qIndex}`;
+                if (locked[key] || submitted) return;
+                setAnswers(prev => ({ ...prev, [key]: word }));
             };
 
             const submitTest = () => {
-                let current = 0; let newLocked = { ...locked };
-                test.mcq.forEach((q, i) => { if (answers[`mcq_${i}`] === q.a) { current++; newLocked[`mcq_${i}`] = true; } });
-                if(test.fib) test.fib.forEach((q, i) => { if (answers[`fib_${i}`] === q.a.toLowerCase()) { current++; newLocked[`fib_${i}`] = true; } });
+                if (submitted || reviewSubmission) return;
+                let current = 0;
+                const newLocked = { ...locked };
 
-                setScore(current); setLocked(newLocked); setSubmitted(true);
-                if (onFinish) onFinish(); 
-                
-                const newSub = { 
-                    subId: Date.now().toString(), username: currentUser.username, testId: test.id, 
-                    testTitle: test.title, score: current, date: new Date().toISOString(),
-                    writingAnswer: test.writingTask ? writingAnswer.trim() : null
+                readingParts.forEach((part, partIndex) => {
+                    part.mcq.forEach((q, i) => {
+                        const key = `mcq_${partIndex}_${i}`;
+                        if (answers[key] === q.a) {
+                            current++;
+                            newLocked[key] = true;
+                        }
+                    });
+                    part.fib.forEach((q, i) => {
+                        const key = `fib_${partIndex}_${i}`;
+                        if (isFIBAnswerCorrect(q, answers[key])) {
+                            current++;
+                            newLocked[key] = true;
+                        }
+                    });
+                });
+
+                setScore(current);
+                setLocked(newLocked);
+                setSubmitted(true);
+                if (onFinish) onFinish();
+
+                const newSub = {
+                    subId: Date.now().toString(),
+                    username: currentUser.username,
+                    testId: test.id,
+                    testTitle: test.title,
+                    score: current,
+                    maxScore,
+                    answers: { ...answers },
+                    date: new Date().toISOString(),
+                    writingAnswer: activePart?.writingTask ? writingAnswer.trim() : (test.writingTask ? writingAnswer.trim() : null)
                 };
-                saveData({ ...data, scores: [...data.scores, newSub] });
+                saveData({ ...data, scores: [...(data.scores || []), newSub] });
             };
 
             const retryIncorrect = () => {
                 setSubmitted(false);
                 const kept = {};
-                Object.keys(answers).forEach(k => { if (locked[k]) kept[k] = answers[k]; });
+                Object.keys(answers).forEach(key => {
+                    if (locked[key]) kept[key] = answers[key];
+                });
                 setAnswers(kept);
             };
 
-            const isWordSaved = (w) => savedVocab.some(item => item.w.toLowerCase() === w.toLowerCase());
+            const isWordSaved = (word) => savedVocab.some(item => item.w.toLowerCase() === word.toLowerCase());
 
-            const handlePassageMouseUp = () => {
+            const isHighlightableSelection = (range) => {
+                if (!range) return false;
+                const node = range.commonAncestorContainer;
+                return !!(
+                    (passageContainerRef.current && passageContainerRef.current.contains(node)) ||
+                    (questionContainerRef.current && questionContainerRef.current.contains(node))
+                );
+            };
+
+            const handleHighlightMouseUp = () => {
                 const selection = window.getSelection();
                 if (!selection || selection.isCollapsed || !selection.toString().trim()) {
                     setHighlightToolbar(null);
                     return;
                 }
-
                 const range = selection.getRangeAt(0);
-                if (passageContainerRef.current && passageContainerRef.current.contains(range.commonAncestorContainer)) {
+                if (isHighlightableSelection(range)) {
                     const rect = range.getBoundingClientRect();
                     setHighlightToolbar({
                         x: rect.left + rect.width / 2,
@@ -2527,123 +3334,131 @@
                 }
             };
 
+            const removeHighlightMark = (mark) => {
+                if (!mark || !mark.parentNode) return;
+                const parent = mark.parentNode;
+                while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+                parent.removeChild(mark);
+                parent.normalize();
+                setHighlightCount(prev => Math.max(0, prev - 1));
+            };
+
             const applyYellowHighlight = () => {
                 const selection = window.getSelection();
                 if (!selection || selection.isCollapsed) return;
-
                 const range = selection.getRangeAt(0);
+                if (!isHighlightableSelection(range)) return;
+
                 const mark = document.createElement('mark');
                 mark.className = 'user-highlight';
                 mark.title = 'Click vào vùng tô vàng để xóa highlight';
-                mark.onclick = (e) => {
-                    e.stopPropagation();
-                    const parent = mark.parentNode;
-                    while (mark.firstChild) {
-                        parent.insertBefore(mark.firstChild, mark);
-                    }
-                    parent.removeChild(mark);
-                    parent.normalize();
-                    setHighlightCount(prev => Math.max(0, prev - 1));
-                };
+                mark.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    removeHighlightMark(mark);
+                });
 
                 try {
                     range.surroundContents(mark);
-                    setHighlightCount(prev => prev + 1);
-                } catch (e) {
+                } catch (error) {
                     const fragment = range.extractContents();
                     mark.appendChild(fragment);
                     range.insertNode(mark);
-                    setHighlightCount(prev => prev + 1);
                 }
-
+                setHighlightCount(prev => prev + 1);
                 selection.removeAllRanges();
                 setHighlightToolbar(null);
             };
 
             const clearAllHighlights = () => {
-                if (!passageContainerRef.current) return;
-                const marks = passageContainerRef.current.querySelectorAll('mark.user-highlight');
-                marks.forEach(mark => {
-                    const parent = mark.parentNode;
-                    while (mark.firstChild) {
-                        parent.insertBefore(mark.firstChild, mark);
-                    }
-                    parent.removeChild(mark);
-                    parent.normalize();
+                [passageContainerRef.current, questionContainerRef.current].forEach(container => {
+                    if (!container) return;
+                    const marks = container.querySelectorAll('mark.user-highlight');
+                    marks.forEach(mark => {
+                        const parent = mark.parentNode;
+                        while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+                        parent.removeChild(mark);
+                        parent.normalize();
+                    });
                 });
                 setHighlightCount(0);
                 setHighlightToolbar(null);
             };
 
             const renderInteractivePassage = () => {
-                if (!test.vocab || test.vocab.length === 0) return test.passage;
+                const passageText = activePart?.passage || '';
+                const vocabList = activePart?.vocab || [];
+                if (vocabList.length === 0) return passageText;
 
-                const sortedVocab = [...test.vocab].sort((a, b) => b.w.length - a.w.length);
-                const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const vocabWords = sortedVocab.map(v => escapeRegExp(v.w));
-                
+                const sortedVocab = [...vocabList].sort((a, b) => (b.w || '').length - (a.w || '').length);
+                const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const vocabWords = sortedVocab.filter(v => v.w).map(v => escapeRegExp(v.w));
+                if (vocabWords.length === 0) return passageText;
+
                 const regex = new RegExp(`\\b(${vocabWords.join('|')})\\b`, 'gi');
-                const parts = test.passage.split(regex);
+                const pieces = passageText.split(regex);
 
-                return parts.map((part, i) => {
-                    const matchedVocab = test.vocab.find(v => v.w.toLowerCase() === part.toLowerCase());
-                    if (matchedVocab) {
-                        const alreadySaved = isWordSaved(matchedVocab.w);
-                        return (
-                            <span 
-                                key={i} 
-                                onClick={() => setActiveWordIndex(activeWordIndex === i ? null : i)}
-                                className="relative inline-block border-b-2 border-dotted border-indigo-400 hover:bg-indigo-100/70 text-indigo-900 cursor-pointer font-medium px-0.5 rounded transition-colors"
-                                title="Click to see meaning, pronounce & save"
-                            >
-                                {part}
-                                {activeWordIndex === i && (
-                                    <span 
-                                        onClick={e => e.stopPropagation()}
-                                        className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 bg-slate-900 text-white text-xs p-3 rounded-xl shadow-2xl z-50 text-left font-sans font-normal leading-normal before:content-[''] before:absolute before:top-full before:left-1/2 before:-translate-x-1/2 before:border-4 before:border-transparent before:border-t-slate-900"
-                                    >
-                                        <span className="flex items-center justify-between border-b border-slate-700 pb-1.5 mb-1.5">
-                                            <span className="font-bold text-indigo-300 text-sm">{matchedVocab.w}</span>
-                                            <button
-                                                type="button"
-                                                onClick={(e) => speakWord(matchedVocab.w, e)}
-                                                className="bg-slate-800 hover:bg-slate-700 px-2 py-0.5 rounded text-xs"
-                                                title="Nghe phát âm"
-                                            >
-                                                🔊
-                                            </button>
-                                        </span>
-                                        <span className="block text-slate-200 mb-2.5">{matchedVocab.m}</span>
-                                        <button
-                                            type="button"
-                                            onClick={() => onSaveVocab && onSaveVocab(matchedVocab, test.title)}
-                                            disabled={alreadySaved}
-                                            className={`w-full py-1.5 rounded-lg font-bold text-center text-[11px] transition ${
-                                                alreadySaved 
-                                                    ? 'bg-emerald-600/30 text-emerald-300 cursor-default' 
-                                                    : 'bg-indigo-600 hover:bg-indigo-500 text-white'
-                                            }`}
-                                        >
-                                            {alreadySaved ? '✓ Đã lưu trong sổ tay' : '+ Lưu vào sổ tay'}
-                                        </button>
+                return pieces.map((piece, i) => {
+                    const matchedVocab = vocabList.find(v => v.w && v.w.toLowerCase() === piece.toLowerCase());
+                    if (!matchedVocab) return <span key={i}>{piece}</span>;
+                    const alreadySaved = isWordSaved(matchedVocab.w);
+                    return (
+                        <span
+                            key={i}
+                            onClick={() => setActiveWordIndex(activeWordIndex === i ? null : i)}
+                            className="relative inline-block border-b-2 border-dotted border-indigo-400 hover:bg-indigo-100/70 text-indigo-900 cursor-pointer font-medium px-0.5 rounded transition-colors"
+                            title="Click to see meaning, pronounce & save"
+                        >
+                            {piece}
+                            {activeWordIndex === i && (
+                                <span
+                                    onClick={event => event.stopPropagation()}
+                                    className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 bg-slate-900 text-white text-xs p-3 rounded-xl shadow-2xl z-50 text-left font-sans font-normal leading-normal before:content-[''] before:absolute before:top-full before:left-1/2 before:-translate-x-1/2 before:border-4 before:border-transparent before:border-t-slate-900"
+                                >
+                                    <span className="flex items-center justify-between border-b border-slate-700 pb-1.5 mb-1.5">
+                                        <span className="font-bold text-indigo-300 text-sm">{matchedVocab.w}</span>
+                                        <button type="button" onClick={(event) => speakWord(matchedVocab.w, event)} className="bg-slate-800 hover:bg-slate-700 px-2 py-0.5 rounded text-xs" title="Nghe phát âm">🔊</button>
                                     </span>
-                                )}
-                            </span>
-                        );
-                    }
-                    return <span key={i}>{part}</span>;
+                                    <span className="block text-slate-200 mb-2.5">{matchedVocab.m}</span>
+                                    <button
+                                        type="button"
+                                        onClick={() => onSaveVocab && onSaveVocab(matchedVocab, test.title)}
+                                        disabled={alreadySaved}
+                                        className={`w-full py-1.5 rounded-lg font-bold text-center text-[11px] transition ${alreadySaved ? 'bg-emerald-600/30 text-emerald-300 cursor-default' : 'bg-indigo-600 hover:bg-indigo-500 text-white'}`}
+                                    >
+                                        {alreadySaved ? '✓ Đã lưu trong sổ tay' : '+ Lưu vào sổ tay'}
+                                    </button>
+                                </span>
+                            )}
+                        </span>
+                    );
                 });
             };
+
+            const renderPartTabs = () => readingParts.length > 1 ? (
+                <div className="flex flex-wrap gap-2 px-5 py-3 bg-slate-50 border-b border-slate-200">
+                    {readingParts.map((part, index) => (
+                        <button
+                            key={index}
+                            type="button"
+                            onClick={() => setActivePartIndex(index)}
+                            className={`px-3 py-2 rounded-lg text-xs font-bold border transition ${activePartIndex === index ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm' : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300 hover:text-indigo-700'}`}
+                        >
+                            Part {index + 1}
+                        </button>
+                    ))}
+                    <span className="self-center text-[11px] text-slate-400 ml-1">{activePart?.title}</span>
+                </div>
+            ) : null;
 
             return (
                 <div className="flex flex-col md:flex-row h-full relative">
                     {highlightToolbar && (
-                        <div 
+                        <div
                             style={{ left: `${highlightToolbar.x}px`, top: `${highlightToolbar.y}px` }}
-                            className="fixed -translate-x-1/2 z-50 bg-slate-900 text-white px-3 py-1.5 rounded-full shadow-xl flex items-center gap-2 border border-slate-700"
+                            className="fixed -translate-x-1/2 z-[60] bg-slate-900 text-white px-3 py-1.5 rounded-full shadow-xl flex items-center gap-2 border border-slate-700"
                         >
                             <button
-                                onMouseDown={(e) => { e.preventDefault(); applyYellowHighlight(); }}
+                                onMouseDown={(event) => { event.preventDefault(); applyYellowHighlight(); }}
                                 className="flex items-center gap-1.5 text-xs font-bold text-yellow-300 hover:text-yellow-200 transition"
                             >
                                 <span className="w-3.5 h-3.5 rounded-full bg-yellow-300 inline-block"></span>
@@ -2656,105 +3471,66 @@
                         {notesOpen ? (
                             <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl shadow-2xl w-80 overflow-hidden">
                                 <div className="bg-amber-200/80 px-4 py-2.5 flex justify-between items-center">
-                                    <span className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
-                                        <span>📝</span> Scratchpad / Ghi chú nhanh
-                                    </span>
-                                    <button onClick={() => setNotesOpen(false)} className="text-xs font-bold text-amber-900 hover:bg-amber-300/60 px-2 py-0.5 rounded">
-                                        Thu gọn ▾
-                                    </button>
+                                    <span className="text-xs font-bold text-amber-950 flex items-center gap-1.5"><span>📝</span> Scratchpad / Ghi chú nhanh</span>
+                                    <button onClick={() => setNotesOpen(false)} className="text-xs font-bold text-amber-900 hover:bg-amber-300/60 px-2 py-0.5 rounded">Thu gọn ▾</button>
                                 </div>
-                                <textarea
-                                    className="w-full h-44 p-3.5 bg-amber-50/50 text-xs text-slate-800 outline-none resize-none leading-relaxed"
-                                    placeholder="Nháp ý chính từng đoạn (Paragraph A, B, C...) hoặc từ khóa câu hỏi..."
-                                    value={notesText}
-                                    onChange={e => setNotesText(e.target.value)}
-                                ></textarea>
+                                <textarea className="w-full h-44 p-3.5 bg-amber-50/50 text-xs text-slate-800 outline-none resize-none leading-relaxed" placeholder="Nháp ý chính từng đoạn (Paragraph A, B, C...) hoặc từ khóa câu hỏi..." value={notesText} onChange={event => setNotesText(event.target.value)}></textarea>
                             </div>
                         ) : (
-                            <button
-                                onClick={() => setNotesOpen(true)}
-                                className="bg-amber-400 hover:bg-amber-300 text-amber-950 font-bold px-4 py-2.5 rounded-full shadow-xl border border-amber-500/40 text-xs flex items-center gap-2 transition transform hover:scale-105"
-                            >
+                            <button onClick={() => setNotesOpen(true)} className="bg-amber-400 hover:bg-amber-300 text-amber-950 font-bold px-4 py-2.5 rounded-full shadow-xl border border-amber-500/40 text-xs flex items-center gap-2 transition transform hover:scale-105">
                                 <span>📝</span> Notes {notesText.trim() ? '•' : ''}
                             </button>
                         )}
                     </div>
 
                     {!reviewSubmission && timeLimit > 0 && (
-                        <div className={`fixed bottom-6 right-6 md:bottom-auto md:top-24 md:right-8 z-50 px-5 py-2.5 rounded-full font-black shadow-2xl border-2 transition-colors duration-500 flex items-center gap-2 backdrop-blur-md ${
-                            submitted ? 'bg-slate-800/95 text-white border-slate-700 hidden md:flex' :
-                            timeLeft <= 60 ? 'bg-red-500/95 text-white border-red-400 animate-pulse' : 
-                            'bg-indigo-600/95 text-white border-indigo-400'
-                        }`}>
+                        <div className={`fixed bottom-6 right-6 md:bottom-auto md:top-24 md:right-8 z-50 px-5 py-2.5 rounded-full font-black shadow-2xl border-2 transition-colors duration-500 flex items-center gap-2 backdrop-blur-md ${submitted ? 'bg-slate-800/95 text-white border-slate-700 hidden md:flex' : timeLeft <= 60 ? 'bg-red-500/95 text-white border-red-400 animate-pulse' : 'bg-indigo-600/95 text-white border-indigo-400'}`}>
                             <span className="text-xl">⏱</span>
                             <span className="text-xl tracking-wider font-mono">{submitted ? 'DONE' : formatTime(timeLeft)}</span>
                         </div>
                     )}
 
-                    {/* LEFT PANEL: READING */}
+                    {/* LEFT PANEL: CURRENT READING PASSAGE */}
                     <div className="w-full md:w-1/2 h-full border-r border-slate-300 paper-bg overflow-y-auto flex flex-col shadow-[inset_-10px_0_20px_-15px_rgba(0,0,0,0.1)]">
-                        <div className="bg-white/90 backdrop-blur-md px-6 py-4 border-b border-slate-200 sticky top-0 z-10 flex justify-between items-center shadow-sm gap-2">
-                            <div className="flex items-center gap-2 min-w-0">
-                                <span className="text-xs font-bold uppercase tracking-widest text-slate-400 flex-shrink-0">Section I</span>
-                                <span className="font-bold text-slate-800 truncate">{test.title.split(': ').pop()}</span>
+                        <div className="bg-white/90 backdrop-blur-md border-b border-slate-200 sticky top-0 z-10 shadow-sm">
+                            <div className="px-6 py-4 flex justify-between items-center gap-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                    <span className="text-xs font-bold uppercase tracking-widest text-slate-400 flex-shrink-0">READING</span>
+                                    <span className="font-bold text-slate-800 truncate">{test.title.split(': ').pop()}</span>
+                                </div>
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                    <span className="hidden lg:inline-block text-[11px] text-slate-400 bg-slate-100 px-2.5 py-1 rounded-full">🖍 Bôi đen bài đọc hoặc câu hỏi</span>
+                                    {highlightCount > 0 && (
+                                        <button onClick={clearAllHighlights} className="text-xs bg-yellow-100 hover:bg-yellow-200 text-amber-900 border border-yellow-300 font-bold px-2.5 py-1 rounded-full transition">Xóa Highlight ({highlightCount})</button>
+                                    )}
+                                </div>
                             </div>
-                            <div className="flex items-center gap-2 flex-shrink-0">
-                                <span className="hidden lg:inline-block text-[11px] text-slate-400 bg-slate-100 px-2.5 py-1 rounded-full">
-                                    🖍 Bôi đen để Highlight
-                                </span>
-                                {highlightCount > 0 && (
-                                    <button 
-                                        onClick={clearAllHighlights}
-                                        className="text-xs bg-yellow-100 hover:bg-yellow-200 text-amber-900 border border-yellow-300 font-bold px-2.5 py-1 rounded-full transition"
-                                    >
-                                        Xóa Highlight ({highlightCount})
-                                    </button>
-                                )}
-                            </div>
+                            {renderPartTabs()}
                         </div>
-                        
-                        <div 
-                            ref={passageContainerRef}
-                            onMouseUp={handlePassageMouseUp}
-                            className="p-8 md:p-12 text-[1.1rem] leading-[2.2rem] text-slate-800 font-serif whitespace-pre-wrap selection:bg-yellow-200 pb-24"
-                        >
+
+                        <div ref={passageContainerRef} onMouseUp={handleHighlightMouseUp} className="p-8 md:p-12 text-[1.1rem] leading-[2.2rem] text-slate-800 font-serif whitespace-pre-wrap selection:bg-yellow-200 pb-24">
+                            <h2 className="font-sans text-sm font-bold uppercase tracking-wider text-indigo-700 mb-5">{activePart?.title}</h2>
                             {renderInteractivePassage()}
 
-                            {test.vocab && test.vocab.length > 0 && (
+                            {activePart?.vocab?.length > 0 && (
                                 <div className="mt-12 bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden font-sans text-base leading-normal">
                                     <div className="bg-slate-50 px-6 py-3 border-b border-slate-200 font-bold text-slate-700 text-sm uppercase tracking-wider flex justify-between items-center">
                                         <span>Glossary Summary</span>
                                         <span className="text-[11px] font-normal text-slate-400 normal-case">Bấm 🔊 để nghe • Lưu từ để học Flashcards</span>
                                     </div>
                                     <div className="p-6 grid gap-3">
-                                        {test.vocab.map((v, i) => {
+                                        {activePart.vocab.map((v, i) => {
                                             const alreadySaved = isWordSaved(v.w);
                                             return (
                                                 <div key={i} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 last:border-0 pb-3 last:pb-0">
                                                     <div className="flex flex-col sm:flex-row sm:items-baseline gap-1 sm:gap-3 flex-1">
                                                         <div className="flex items-center gap-2 sm:w-2/5">
                                                             <span className="font-bold text-indigo-800">{v.w}</span>
-                                                            <button
-                                                                type="button"
-                                                                onClick={(e) => speakWord(v.w, e)}
-                                                                className="text-sm hover:scale-110 transition"
-                                                                title="Nghe phát âm"
-                                                            >
-                                                                🔊
-                                                            </button>
+                                                            <button type="button" onClick={(event) => speakWord(v.w, event)} className="text-sm hover:scale-110 transition" title="Nghe phát âm">🔊</button>
                                                         </div>
                                                         <span className="text-slate-600 text-sm sm:w-3/5">{v.m}</span>
                                                     </div>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => onSaveVocab && onSaveVocab(v, test.title)}
-                                                        disabled={alreadySaved}
-                                                        className={`text-xs font-bold px-3 py-1 rounded-lg transition self-start sm:self-center flex-shrink-0 ${
-                                                            alreadySaved
-                                                                ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
-                                                                : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200'
-                                                        }`}
-                                                    >
+                                                    <button type="button" onClick={() => onSaveVocab && onSaveVocab(v, test.title)} disabled={alreadySaved} className={`text-xs font-bold px-3 py-1 rounded-lg transition self-start sm:self-center flex-shrink-0 ${alreadySaved ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200'}`}>
                                                         {alreadySaved ? '✓ Đã lưu' : '+ Lưu vào sổ tay'}
                                                     </button>
                                                 </div>
@@ -2766,9 +3542,19 @@
                         </div>
                     </div>
 
-                    {/* RIGHT PANEL: QUESTIONS */}
-                    <div className="w-full md:w-1/2 h-full bg-slate-50 overflow-y-auto p-6 md:p-10 relative pb-32">
-                        
+                    {/* RIGHT PANEL: QUESTIONS FOR THE SELECTED PASSAGE */}
+                    <div ref={questionContainerRef} onMouseUp={handleHighlightMouseUp} className="w-full md:w-1/2 h-full bg-slate-50 overflow-y-auto p-6 md:p-10 relative pb-32">
+                        {readingParts.length > 1 && (
+                            <div className="flex flex-wrap items-center gap-2 mb-6">
+                                {readingParts.map((part, index) => (
+                                    <button key={index} type="button" onClick={() => setActivePartIndex(index)} className={`px-3 py-2 rounded-lg text-xs font-bold border transition ${activePartIndex === index ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:border-indigo-300'}`}>
+                                        Part {index + 1}
+                                    </button>
+                                ))}
+                                <span className="text-xs text-slate-500">{activePart?.mcq.length + activePart?.fib.length} questions in this part</span>
+                            </div>
+                        )}
+
                         {submitted && (
                             <div className="mb-8 bg-white border border-indigo-100 p-6 rounded-2xl shadow-lg flex justify-between items-center sticky top-0 z-20 overflow-hidden relative">
                                 <div className="absolute top-0 left-0 w-2 h-full bg-indigo-500"></div>
@@ -2777,123 +3563,117 @@
                                     <h2 className="text-3xl font-black text-slate-800">{score} <span className="text-xl text-slate-400 font-medium">/ {maxScore}</span></h2>
                                 </div>
                                 {(score < maxScore && !reviewSubmission) && (
-                                    <button onClick={retryIncorrect} className="bg-slate-900 hover:bg-indigo-600 text-white font-bold py-3 px-6 rounded-xl shadow-md transition-colors duration-300">
-                                        Retry Errors ↺
-                                    </button>
+                                    <button onClick={retryIncorrect} className="bg-slate-900 hover:bg-indigo-600 text-white font-bold py-3 px-6 rounded-xl shadow-md transition-colors duration-300">Retry Errors ↺</button>
                                 )}
                             </div>
                         )}
 
-                        {test.mcq && test.mcq.length > 0 && (
+                        {activePart?.mcq?.length > 0 && (
                             <div className="mb-12">
-                                <h3 className="font-bold text-lg mb-6 text-slate-800 border-b border-slate-200 pb-2">Part 1: Multiple Choice</h3>
+                                <h3 className="font-bold text-lg mb-6 text-slate-800 border-b border-slate-200 pb-2">Multiple Choice</h3>
                                 <div className="space-y-6">
-                                    {test.mcq.map((q, i) => {
-                                        const isLocked = locked[`mcq_${i}`];
+                                    {activePart.mcq.map((q, i) => {
+                                        const key = `mcq_${activePartIndex}_${i}`;
+                                        const isLocked = locked[key];
                                         const isWrong = submitted && !isLocked;
                                         return (
                                             <div key={i} className={`p-6 rounded-2xl border ${isLocked ? 'bg-emerald-50/50 border-emerald-200' : isWrong ? 'bg-red-50/50 border-red-200' : 'bg-white border-slate-200 shadow-sm'}`}>
                                                 <p className="font-bold text-slate-800 mb-4">{q.q}</p>
                                                 <div className="space-y-2">
-                                                    {q.options.map((opt, oIdx) => {
-                                                        const letter = opt.charAt(0);
-                                                        const isSelected = answers[`mcq_${i}`] === letter;
+                                                    {(q.options || []).map((opt, optionIndex) => {
+                                                        const letter = String(opt).charAt(0);
+                                                        const isSelected = answers[key] === letter;
                                                         return (
-                                                            <label 
-                                                                key={oIdx} 
-                                                                className={`flex items-center p-3 rounded-xl border cursor-pointer transition-all ${isSelected ? 'bg-indigo-50 border-indigo-300 shadow-[inset_0_0_0_1px_rgba(165,180,252,1)]' : 'hover:bg-slate-50 border-slate-100'} ${isLocked ? 'opacity-70 pointer-events-none' : ''}`}
-                                                            >
-                                                                <input 
-                                                                    type="radio" 
-                                                                    name={`mcq_${i}`} 
-                                                                    className="hidden" 
-                                                                    disabled={isLocked} 
-                                                                    checked={isSelected} 
-                                                                    onChange={() => handleMCQ(i, letter)} 
-                                                                />
+                                                            <label key={optionIndex} className={`flex items-center p-3 rounded-xl border cursor-pointer transition-all ${isSelected ? 'bg-indigo-50 border-indigo-300 shadow-[inset_0_0_0_1px_rgba(165,180,252,1)]' : 'hover:bg-slate-50 border-slate-100'} ${(isLocked || (submitted && !locked[key])) ? 'opacity-80' : ''}`}>
+                                                                <input type="radio" name={key} className="hidden" disabled={isLocked || (submitted && !locked[key]) || !!reviewSubmission} checked={isSelected} onChange={() => handleMCQ(activePartIndex, i, letter)} />
                                                                 <div className={`w-5 h-5 rounded-full border flex items-center justify-center mr-4 flex-shrink-0 ${isSelected ? 'border-indigo-600' : 'border-slate-300'}`}>
                                                                     {isSelected && <div className="w-2.5 h-2.5 bg-indigo-600 rounded-full"></div>}
                                                                 </div>
                                                                 <span className={isSelected ? 'text-indigo-900 font-medium' : 'text-slate-600'}>{opt}</span>
                                                             </label>
-                                                        )
+                                                        );
                                                     })}
                                                 </div>
                                                 {isLocked && <div className="mt-4 flex items-center gap-1 text-emerald-600 text-sm font-bold">✓ Correct</div>}
+                                                {submitted && !isLocked && <div className="mt-3 text-xs text-red-600 font-semibold">Correct answer: {q.a}</div>}
                                             </div>
-                                        )
+                                        );
                                     })}
                                 </div>
                             </div>
                         )}
 
-                        {test.fib && test.fib.length > 0 && (
+                        {activePart?.fib?.length > 0 && (
                             <div className="mb-12">
-                                <h3 className="font-bold text-lg mb-6 text-slate-800 border-b border-slate-200 pb-2">Part 2: Fill in the Blanks</h3>
-                                
-                                <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 mb-8 sticky top-2 z-10">
-                                    <p className="text-xs font-bold text-slate-400 mb-3 uppercase tracking-wider">Word Bank</p>
-                                    <div className="flex flex-wrap gap-2">
-                                        {test.wordBank.map((word, i) => {
-                                            const isUsed = Object.values(answers).includes(word.toLowerCase());
-                                            return (
-                                                <span key={i} className={`px-3 py-1.5 rounded-lg text-sm font-medium border ${isUsed ? 'bg-slate-100 text-slate-400 border-transparent line-through' : 'bg-white text-indigo-700 border-indigo-200 shadow-sm'}`}>
-                                                    {word}
-                                                </span>
-                                            );
-                                        })}
-                                    </div>
+                                <div className="flex flex-wrap justify-between items-center gap-2 border-b border-slate-200 pb-2 mb-6">
+                                    <h3 className="font-bold text-lg text-slate-800">Fill in the Blanks</h3>
+                                    <span className="text-[11px] font-bold uppercase tracking-wide bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-1.5 rounded-full">Short-answer questions · 1–3 words when specified</span>
                                 </div>
-
+                                {(activePart.wordBank || []).length > 0 && (
+                                    <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 mb-8 sticky top-2 z-10">
+                                        <p className="text-xs font-bold text-slate-400 mb-3 uppercase tracking-wider">Word Bank</p>
+                                        <div className="flex flex-wrap gap-2">
+                                            {activePart.wordBank.map((word, i) => {
+                                                const isUsed = Object.values(answers).some(answer => normalizeShortAnswer(answer) === normalizeShortAnswer(word));
+                                                return <span key={i} className={`px-3 py-1.5 rounded-lg text-sm font-medium border ${isUsed ? 'bg-slate-100 text-slate-400 border-transparent line-through' : 'bg-white text-indigo-700 border-indigo-200 shadow-sm'}`}>{word}</span>;
+                                            })}
+                                        </div>
+                                    </div>
+                                )}
                                 <div className="space-y-4">
-                                    {test.fib.map((q, i) => {
-                                        const isLocked = locked[`fib_${i}`];
+                                    {activePart.fib.map((q, i) => {
+                                        const key = `fib_${activePartIndex}_${i}`;
+                                        const isLocked = locked[key];
                                         const isWrong = submitted && !isLocked;
+                                        const acceptedAnswers = getFIBAcceptedAnswers(q);
+                                        const wordLimitLabel = getFIBWordLimitLabel(q);
+                                        const currentWordCount = getFIBWordCount(answers[key] || '');
+                                        const minWords = Number.isInteger(q.minWords) ? q.minWords : null;
+                                        const maxWords = Number.isInteger(q.maxWords) ? q.maxWords : Number.isInteger(q.wordLimit) ? q.wordLimit : null;
+                                        const outsideWordLimit = (minWords !== null && currentWordCount > 0 && currentWordCount < minWords)
+                                            || (maxWords !== null && currentWordCount > maxWords);
                                         return (
                                             <div key={i} className={`p-5 rounded-xl border flex flex-col xl:flex-row xl:items-center gap-4 ${isLocked ? 'bg-emerald-50/50 border-emerald-200' : isWrong ? 'bg-red-50/50 border-red-200' : 'bg-white border-slate-200 shadow-sm'}`}>
-                                                <p className="flex-1 font-medium text-slate-800">{q.q}</p>
-                                                <div className="flex flex-col items-start xl:items-end flex-shrink-0">
-                                                    <input type="text" placeholder="Type here..." disabled={isLocked} value={answers[`fib_${i}`] || ''} onChange={(e) => handleFIB(i, e.target.value)}
-                                                        className={`border-b-2 border-slate-300 bg-transparent py-2 px-1 w-40 text-center font-bold outline-none focus:border-indigo-500 transition-colors ${isLocked ? 'text-emerald-700 border-emerald-300' : 'text-slate-800'}`} />
-                                                    {isLocked && <span className="text-emerald-600 text-xs font-bold mt-2">✓ Locked</span>}
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="font-medium text-slate-800">{q.q}</p>
+                                                    {wordLimitLabel && <span className="inline-flex mt-2 text-[10px] font-bold tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-md">{wordLimitLabel}</span>}
+                                                </div>
+                                                <div className="flex flex-col items-start xl:items-end flex-shrink-0 min-w-[190px]">
+                                                    <input
+                                                        type="text"
+                                                        placeholder={wordLimitLabel || 'Type your answer...'}
+                                                        disabled={isLocked || submitted || !!reviewSubmission}
+                                                        value={answers[key] || ''}
+                                                        onChange={(event) => handleFIB(activePartIndex, i, event.target.value)}
+                                                        className={`border-2 rounded-xl bg-white py-2.5 px-3 w-full sm:w-56 text-center font-semibold outline-none focus:border-indigo-500 transition-colors ${isLocked ? 'text-emerald-700 border-emerald-300 bg-emerald-50' : outsideWordLimit ? 'text-slate-800 border-amber-300' : 'text-slate-800 border-slate-200'}`}
+                                                    />
+                                                    {wordLimitLabel && !submitted && <span className={`text-[11px] mt-1.5 ${outsideWordLimit ? 'text-amber-600 font-semibold' : 'text-slate-400'}`}>{currentWordCount} word(s) entered</span>}
+                                                    {isLocked && <span className="text-emerald-600 text-xs font-bold mt-2">✓ Correct</span>}
+                                                    {submitted && !isLocked && <span className="text-red-600 text-xs font-bold mt-2">Accepted answer: {acceptedAnswers.join(' / ')}</span>}
                                                 </div>
                                             </div>
-                                        )
+                                        );
                                     })}
                                 </div>
                             </div>
                         )}
 
-                        {test.writingTask && (
+                        {activePart?.writingTask && (
                             <div className="mb-12">
-                                <h3 className="font-bold text-lg mb-6 text-slate-800 border-b border-slate-200 pb-2">Part 3: Written Response</h3>
+                                <h3 className="font-bold text-lg mb-6 text-slate-800 border-b border-slate-200 pb-2">Written Response</h3>
                                 <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 relative overflow-hidden">
                                     <div className="absolute top-0 left-0 w-1 h-full bg-slate-800"></div>
-                                    <p className="font-medium text-slate-800 whitespace-pre-wrap leading-relaxed mb-6">{test.writingTask.prompt}</p>
-                                    
-                                    {test.writingTask.reqs && (
+                                    <p className="font-medium text-slate-800 whitespace-pre-wrap leading-relaxed mb-6">{activePart.writingTask.prompt}</p>
+                                    {activePart.writingTask.reqs && (
                                         <div className="mb-6 p-4 bg-slate-50 border border-slate-100 rounded-xl">
                                             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Requirements</span>
-                                            <ul className="list-disc ml-5 text-sm text-slate-600 space-y-1">
-                                                {test.writingTask.reqs.map(r => <li key={r}>{r}</li>)}
-                                            </ul>
+                                            <ul className="list-disc ml-5 text-sm text-slate-600 space-y-1">{activePart.writingTask.reqs.map((requirement, i) => <li key={i}>{requirement}</li>)}</ul>
                                         </div>
                                     )}
-
-                                    <textarea 
-                                        className={`w-full p-5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none font-serif leading-loose text-slate-800 bg-slate-50 shadow-inner resize-y min-h-[200px] ${submitted ? 'opacity-80 pointer-events-none' : ''}`}
-                                        placeholder="Begin your response here..."
-                                        value={writingAnswer}
-                                        onChange={e => setWritingAnswer(e.target.value)}
-                                        disabled={submitted}
-                                    />
-
+                                    <textarea className={`w-full p-5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none font-serif leading-loose text-slate-800 bg-slate-50 shadow-inner resize-y min-h-[200px] ${submitted ? 'opacity-80 pointer-events-none' : ''}`} placeholder="Begin your response here..." value={writingAnswer} onChange={event => setWritingAnswer(event.target.value)} disabled={submitted} />
                                     {reviewSubmission?.feedback && (
                                         <div className="mt-8 p-6 bg-indigo-50 border border-indigo-100 rounded-xl">
-                                            <div className="flex items-center gap-2 mb-3">
-                                                <div className="w-8 h-8 rounded-full bg-indigo-200 flex items-center justify-center text-indigo-700 text-lg">👩‍🏫</div>
-                                                <h4 className="font-bold text-indigo-900 tracking-tight">Instructor's Feedback</h4>
-                                            </div>
+                                            <div className="flex items-center gap-2 mb-3"><div className="w-8 h-8 rounded-full bg-indigo-200 flex items-center justify-center text-indigo-700 text-lg">👩‍🏫</div><h4 className="font-bold text-indigo-900 tracking-tight">Instructor's Feedback</h4></div>
                                             <p className="text-indigo-900/80 whitespace-pre-wrap leading-relaxed text-sm ml-10">{reviewSubmission.feedback}</p>
                                         </div>
                                     )}
@@ -2901,10 +3681,15 @@
                             </div>
                         )}
 
-                        {!submitted && (
-                            <button onClick={submitTest} className="w-full bg-slate-900 hover:bg-indigo-600 text-white font-bold py-5 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 text-lg transform hover:-translate-y-1">
-                                Submit Assessment
-                            </button>
+                        {!submitted && !reviewSubmission && (
+                            <button onClick={submitTest} className="w-full bg-slate-900 hover:bg-indigo-600 text-white font-bold py-5 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 text-lg transform hover:-translate-y-1">Submit Assessment</button>
+                        )}
+                        {readingParts.length > 1 && (
+                            <div className="flex justify-between items-center mt-8 gap-3">
+                                <button type="button" disabled={activePartIndex === 0} onClick={() => setActivePartIndex(index => Math.max(0, index - 1))} className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-700 text-sm font-bold disabled:opacity-40">← Previous Part</button>
+                                <span className="text-xs text-slate-500">Part {activePartIndex + 1} of {readingParts.length}</span>
+                                <button type="button" disabled={activePartIndex === readingParts.length - 1} onClick={() => setActivePartIndex(index => Math.min(readingParts.length - 1, index + 1))} className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-700 text-sm font-bold disabled:opacity-40">Next Part →</button>
+                            </div>
                         )}
                     </div>
                 </div>
